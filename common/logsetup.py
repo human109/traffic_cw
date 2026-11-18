@@ -23,6 +23,9 @@ def _configure() -> None:
     stream.setFormatter(fmt)
     root.addHandler(stream)
 
+    # urllib3는 DEBUG에서 요청 URL(쿼리의 API 키 포함)을 기록하므로 WARNING 미만은 막는다.
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
     log_dir = Path(os.environ.get("LOG_DIR", "logs"))
     try:
         log_dir.mkdir(parents=True, exist_ok=True)

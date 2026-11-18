@@ -31,6 +31,10 @@ class Settings:
 
     http_timeout_s: float = 10.0
     http_retries: int = 3
+    http_backoff_min_s: float = 1.0
+    http_backoff_max_s: float = 30.0
+
+    db_busy_timeout_ms: int = 5000
 
     # v0 상식선 상한. SPEC 6.4의 "제한속도 x 1.5"는 링크 제한속도 확보 후 Slice 1에서 적용한다.
     max_valid_speed_kmh: float = 150.0

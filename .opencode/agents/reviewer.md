@@ -24,6 +24,12 @@ permissions:
   - action: shell
     resource: "pytest*"
     effect: allow
+  - action: shell
+    resource: ".venv\\Scripts\\python -m pytest*"
+    effect: allow
+  - action: shell
+    resource: ".venv/Scripts/python -m pytest*"
+    effect: allow
   - action: subagent
     resource: "*"
     effect: deny

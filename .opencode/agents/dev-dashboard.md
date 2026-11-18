@@ -25,6 +25,12 @@ permissions:
     resource: "pytest*"
     effect: allow
   - action: shell
+    resource: ".venv\\Scripts\\python -m pytest*"
+    effect: allow
+  - action: shell
+    resource: ".venv/Scripts/python -m pytest*"
+    effect: allow
+  - action: shell
     resource: "git status*"
     effect: allow
   - action: shell
