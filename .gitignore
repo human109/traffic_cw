@@ -1,0 +1,19 @@
+# secrets
+.env
+
+# environments / caches
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# runtime data (DB, raw responses, reference SHP, logs, models)
+data/
+logs/
+saved_models/
+*.db
+*.db-wal
+*.db-shm
+
+# superpowers scratch
+.superpowers/

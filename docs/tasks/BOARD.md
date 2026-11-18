@@ -1,0 +1,54 @@
+# 작업 현황판
+
+**오케스트레이터만 수정한다.** 다른 에이전트는 보고서(`AGENTS.md` 7장)로 상태를 알린다.
+
+상태: `ready`(시작 가능) · `waiting`(선행 작업 대기) · `in_progress` · `review` · `done` · `blocked`
+
+진행 방식은 슬라이스 반복이다(`docs/superpowers/specs/2026-11-18-thin-slice-design.md`). 같은 **병렬 그룹**의 작업은 소유 경로가 겹치지 않아 동시에 실행할 수 있다.
+
+---
+
+## 리서치
+
+| ID | 주제 | 상태 | 남은 일 |
+|---|---|---|---|
+| R-01 | 경찰청 교통소통정보 API | done (실호출 확인 필요) | 사람이 키로 응답 형식을 확인한다. 지도 URL만 제공되면 수집원에서 제외한다 |
+| R-02 | ITS 소통정보 API | done (실호출 확인 필요) | 창원대로 포함 여부, 갱신 간격, 결측 표현 확인 (Slice 0 Task 10) |
+| R-03 | 표준노드링크 | partial | 파일을 받아 두었다(`data/reference/NODELINKDATA_2026-11-11/`). 창원대로 링크 표를 작성하는 R-03b가 남았다 |
+| R-04 | UTIS | done | 자동 수집원으로 쓰지 않고 수동 대조용으로만 쓴다 |
+| R-05 | 공휴일·학사일정 | done | Slice 1의 달력 적재에서 사용한다 |
+| R-03b | 표준노드링크에서 창원대로 출근 방향 링크 표 추출 → `config/segment_links.csv` 후보 | ready | - |
+
+## Slice 0 — 얇은 전체 흐름 (`docs/superpowers/plans/2026-11-18-slice0.md`)
+
+| Task | ID | 작업 | 소유 | 선행 | 병렬 그룹 | 상태 |
+|---|---|---|---|---|---|---|
+| 1 | T-00 | 저장소 초기화, 문서 갱신 | orchestrator | - | - | in_progress |
+| 2 | T-01 | 공용 시간·로깅·레코드·설정 | orchestrator | 1 | - | waiting |
+| 3 | C-01/02/06, F-01 | 계약 v1, 공용 합성 픽스처 | orchestrator | 2 | - | waiting |
+| 4 | D-DAT-01 | DB 연결·스키마·시드 | dev-data | 3 | A | waiting |
+| 5 | D-COL-01 | ITS 어댑터, `run_once` | dev-collector | 3 | A | waiting |
+| 7 | D-ML-00 | 현재 속도 유지 예측 | dev-ml | 3 | A | waiting |
+| 8 | D-DSH-00 | 대시보드 v0 | dev-dashboard | 3 | A | waiting |
+| 6 | D-DAT-02a | 5분 구간 집계 v0 | dev-data | 4 | B | waiting |
+| 9 | D-COL-02 | 스케줄러 | dev-collector | 5 | B | waiting |
+| 10 | I-01 | 통합 시험, 실제 호출, 상시 수집 시작 | orchestrator + 사람 | 6, 7, 8, 9 | - | waiting |
+
+## 다음 슬라이스 (계획 작성 전)
+
+| 슬라이스 | 주요 작업 |
+|---|---|
+| Slice 1 | 경찰청 어댑터(필요 시), 갱신 정지·70% 부분 관측·forward fill, 기준 모델 3종, 평가 지표, 시계열 그래프, `calendar_info` 적재 |
+| Slice 2 | as-of 특성(C-03), XGBoost(C-04), 성능 화면 |
+| Slice 3 | walk-forward 정식 평가, 구간별 모델 비교 |
+| Slice 4 (선택) | 시민 공개 (R-07, R-08, C-05, D-PUB-*) |
+
+---
+
+## 결정·변경 요청(CR)·차단 기록
+
+| 일자 | 출처 | 내용 | 처리 |
+|---|---|---|---|
+| 2026-11-18 | R-01, R-02 | 경찰청 API는 링크 데이터가 아닐 가능성이 높아, 첫 수집원을 ITS로 바꾼다 | Slice 0 계획에 반영 |
+| 2026-11-18 | R-05 | `calendar_info`의 방학·휴가 컬럼에서 DEFAULT 0을 빼고 NULL 허용 | C-01 v1에 반영 예정 (Task 3) |
+| 2026-11-18 | 실행 | 소유 경로가 다른 dev 작업은 병렬로 실행하고, 커밋은 오케스트레이터만 한다(AGENTS.md 우선) | Ruling |
