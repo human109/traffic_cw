@@ -12,9 +12,13 @@ KST = timezone(timedelta(hours=9), name="KST")
 _ISO_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
 
-def _require_aware(dt: datetime) -> None:
+def require_aware(dt: datetime) -> None:
+    """timezone 정보가 없는 datetime이면 ValueError. 진입점의 입력 검사에 쓴다."""
     if dt.tzinfo is None or dt.utcoffset() is None:
         raise ValueError(f"timezone 정보가 없는 datetime은 허용하지 않는다: {dt!r}")
+
+
+_require_aware = require_aware
 
 
 def now_kst() -> datetime:

@@ -47,6 +47,8 @@ class Settings:
     grade_slow_min_kmh: float = 20.0
 
     collect_cron_minute: str = "*/5"
+    # 예정 시각에서 이만큼 늦어도 그 회차를 실행한다. 절전 등으로 더 늦으면 건너뛰고 다음 회차부터 실행한다.
+    scheduler_misfire_grace_s: int = 60
 
 
 def get_settings() -> Settings:
