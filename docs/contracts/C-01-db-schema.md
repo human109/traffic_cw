@@ -15,6 +15,7 @@ DDL 원문은 `docs/contracts/C-01-schema.sql`이다. `database/schema.sql`은 �
 
 - 모든 시각 컬럼은 `YYYY-MM-DDTHH:MM:SS+09:00` 문자열이다(`common.timeutil.to_iso`).
 - 결측은 NULL로 저장한다. 수집 실패나 미관측을 0으로 쓰지 않는다.
+- `segment_link.source`는 **링크 ID 체계의 출처**다(예: `moct_nodelink` = 국토부 표준노드링크, 테스트는 `synthetic`). 관측 수집원(`traffic_observation.source`, 예: `its`)과는 다르다. ITS와 경찰청 UTIC 모두 표준노드링크 ID를 쓰므로(R-01, R-02), 수집기와 전처리는 `link_id`로만 대조하고 `segment_link.source`로 거르지 않는다.
 - `traffic_observation.quality_flag`: `ok` / `default_value`(API가 준 0 등 결측을 나타내는 값) / `out_of_range` / `frozen`(Slice 1)
 - `segment_traffic_5min.quality_flag`:
   - `ok`: 본선 링크가 모두 관측되었고 길이가 모두 있어 거리 가중 조화평균으로 계산함
@@ -30,4 +31,5 @@ DDL 원문은 `docs/contracts/C-01-schema.sql`이다. `database/schema.sql`은 �
 
 | 버전 | 일자 | 변경 | CR 출처 |
 |---|---|---|---|
+| v1.1 | 2026-11-18 | DDL 변경 없음. `segment_link.source`의 의미(링크 ID 체계 출처)를 명시 | Task 5 리뷰 I-1 |
 | v1 | 2026-11-18 | SPEC 5장·20.6 DDL 확정. `IF NOT EXISTS` 추가, `segment_traffic_5min`에 `unweighted` 플래그, `calendar_info` 방학·휴가 컬럼 NULL 허용 | Slice 0 계획, R-05 |

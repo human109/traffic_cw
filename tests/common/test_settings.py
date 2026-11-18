@@ -36,6 +36,19 @@ def test_settings_repr_hides_key(clean_env: None, monkeypatch: pytest.MonkeyPatc
 
 def test_segments_seed() -> None:
     ids = [s["segment_id"] for s in SEGMENTS]
-    assert ids == ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7"]
-    assert [s["is_target"] for s in SEGMENTS] == [0, 1, 1, 1, 1, 1, 1, 1]
-    assert [s["seq"] for s in SEGMENTS] == list(range(8))
+    assert ids == ["S0", "S1", "S2", "S3", "S4", "S5", "S6"]
+    assert [s["is_target"] for s in SEGMENTS] == [0, 1, 1, 1, 1, 1, 1]
+    assert [s["seq"] for s in SEGMENTS] == list(range(7))
+
+
+def test_segment_links_match_segments() -> None:
+    import csv
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "config" / "segment_links.csv"
+    with path.open(encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert {r["segment_id"] for r in rows} == {s["segment_id"] for s in SEGMENTS}
+    assert len({r["link_id"] for r in rows}) == len(rows)
+    assert all(len(r["link_id"]) == 10 and r["link_id"].isdigit() for r in rows)
+    assert all(r["valid_from"].endswith("+09:00") for r in rows)
