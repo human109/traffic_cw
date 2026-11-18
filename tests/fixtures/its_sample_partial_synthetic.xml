@@ -1,0 +1,22 @@
+<!-- synthetic: 테스트 전용 합성 응답(일부 링크만 포함). 구조는 R-02 #4를 따른다. 실제 데이터 아님 -->
+<response>
+  <header>
+    <resultCode>0</resultCode>
+    <resultMsg>SUCCESS</resultMsg>
+  </header>
+  <body>
+    <totalCount>2</totalCount>
+    <items>
+      <item>
+        <roadName>합성도로</roadName><roadDrcType>1</roadDrcType><linkNo/>
+        <linkId>SYN0000001</linkId><startNodeId>SYNN000001</startNodeId><endNodeId>SYNN000002</endNodeId>
+        <speed>58.0</speed><travelTime>31.0</travelTime><createdDate>20261116070501</createdDate>
+      </item>
+      <item>
+        <roadName>합성도로</roadName><roadDrcType>1</roadDrcType><linkNo/>
+        <linkId>SYN0000002</linkId><startNodeId>SYNN000002</startNodeId><endNodeId>SYNN000003</endNodeId>
+        <speed>47.0</speed><travelTime>53.6</travelTime><createdDate>20261116070501</createdDate>
+      </item>
+    </items>
+  </body>
+</response>
