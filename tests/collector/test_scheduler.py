@@ -9,6 +9,7 @@ import pytest
 
 from collector import scheduler
 from collector.scheduler import build_scheduler, main, run_pipeline
+from common.records import CollectionResult
 from common.timeutil import KST
 from config.settings import Settings
 
@@ -34,6 +35,55 @@ def _recording_steps(calls: list[tuple[str, datetime]], fail: str | None = None,
         return step
 
     return [(name, make(name)) for name in ORDER]
+
+
+def _collection(status: str) -> CollectionResult:
+    return CollectionResult(
+        source="its",
+        status=status,  # type: ignore[arg-type]
+        started_at=NOW,
+        finished_at=NOW,
+        http_status=None,
+        links_expected=None,
+        links_received=0,
+        record_count=0,
+        error_message=None,
+    )
+
+
+def _steps_with_collect(calls: list[str], status: str) -> list[tuple[str, object]]:
+    def make(name: str):
+        def step(now: datetime) -> object:
+            calls.append(name)
+            return _collection(status) if name == "collect" else 1
+
+        return step
+
+    return [(name, make(name)) for name in ORDER]
+
+
+@pytest.mark.parametrize(
+    ("status", "expected", "exit_code"),
+    [
+        ("failed", "error: failed", 1),
+        ("auth_error", "error: auth_error", 1),
+        ("success", "success", 0),
+        ("partial", "partial", 0),
+        ("no_update", "no_update", 0),
+    ],
+)
+def test_collection_status_reported(
+    monkeypatch: pytest.MonkeyPatch, status: str, expected: str, exit_code: int
+) -> None:
+    calls: list[str] = []
+    result = run_pipeline(NOW, _steps_with_collect(calls, status))  # type: ignore[arg-type]
+    assert result == {"collect": expected, "preprocess": "ok", "backfill": "ok", "predict": "ok"}
+    assert calls == ORDER  # 수집이 실패해도 다음 단계는 실행
+
+    calls.clear()
+    monkeypatch.setattr(scheduler, "_default_steps", lambda: _steps_with_collect(calls, status))
+    assert main(["--once"]) == exit_code
+    assert calls == ORDER
 
 
 def test_order() -> None:

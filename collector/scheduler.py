@@ -15,6 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from collector.its import mask_secret
 from common.logsetup import get_logger
+from common.records import CollectionResult
 from common.timeutil import KST, now_kst, require_aware, to_iso
 from config.settings import Settings
 
@@ -51,7 +52,12 @@ def _default_steps() -> list[tuple[str, Step]]:
 
 
 def run_pipeline(now: datetime, steps: Sequence[tuple[str, Step]] | None = None) -> dict[str, str]:
-    """단계를 순서대로 실행하고 단계별 `"ok"` 또는 `"error: <예외 클래스 이름>"`을 돌려준다.
+    """단계를 순서대로 실행하고 단계별 결과 문자열을 돌려준다.
+
+    - 예외 → `"error: <예외 클래스 이름>"`
+    - `CollectionResult` 반환 → `"success"`·`"partial"`·`"no_update"` 또는 `"error: failed"`·`"error: auth_error"`
+    - 그 밖의 반환 → `"ok"`
+    `"error: "`로 시작하는 값이 실패다(`is_failure`).
 
     한 단계가 실패해도 다음 단계를 실행한다. 예외 메시지는 결과에 넣지 않고 키를 가려 로그에만 남긴다.
     `now`가 timezone 정보 없는 datetime이면 `ValueError`(어떤 단계도 실행하지 않는다).
@@ -63,14 +69,33 @@ def run_pipeline(now: datetime, steps: Sequence[tuple[str, Step]] | None = None)
     results: dict[str, str] = {}
     for name, step in steps:
         try:
-            step(now)
-            results[name] = "ok"
+            results[name] = _outcome(step(now))
         except Exception as e:
             results[name] = f"error: {type(e).__name__}"
             # traceback에는 키가 섞인 URL이 들어갈 수 있어 가린 메시지만 남긴다.
             log.error("파이프라인 단계 %s 실패: %s", name, _masked(e))
     log.info("파이프라인 %s: %s", to_iso(now), results)
     return results
+
+
+_FAILED_COLLECTION = frozenset({"failed", "auth_error"})
+
+
+def _outcome(value: object) -> str:
+    """step 반환값을 결과 문자열로 바꾼다.
+
+    `CollectionResult`이면 수집 실패가 정상처럼 보이지 않게 상태를 드러낸다 (SPEC 4.5):
+    `failed`·`auth_error` → `"error: <status>"`, 그 밖(`success`·`partial`·`no_update`) → `"<status>"`.
+    다른 반환값은 예외 없이 끝났으므로 `"ok"`.
+    """
+    if isinstance(value, CollectionResult):
+        return f"error: {value.status}" if value.status in _FAILED_COLLECTION else value.status
+    return "ok"
+
+
+def is_failure(outcome: str) -> bool:
+    """`run_pipeline` 결과 값이 실패인지 (`"error: "`로 시작)."""
+    return outcome.startswith("error: ")
 
 
 def _secret() -> str | None:
@@ -118,7 +143,7 @@ def build_scheduler(settings: Settings) -> BlockingScheduler:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`--once`이면 파이프라인을 1회 실행하고 끝낸다(모든 단계 ok면 0, 아니면 1).
+    """`--once`이면 파이프라인을 1회 실행하고 끝낸다(`"error: "`로 시작하는 단계가 하나라도 있으면 1, 아니면 0).
 
     인자가 없으면 스케줄러를 상주 실행한다(Ctrl+C로 종료, 0 반환).
     """
@@ -128,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.once:
         results = run_pipeline(now_kst())
-        failed = {k: v for k, v in results.items() if v != "ok"}
+        failed = {k: v for k, v in results.items() if is_failure(v)}
         if failed:
             log.warning("파이프라인 1회 실행 중 실패한 단계: %s", failed)
             return 1
