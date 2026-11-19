@@ -23,16 +23,27 @@
 
 | Task | ID | 작업 | 소유 | 선행 | 병렬 그룹 | 상태 |
 |---|---|---|---|---|---|---|
-| 1 | T-00 | 저장소 초기화, 문서 갱신 | orchestrator | - | - | in_progress |
-| 2 | T-01 | 공용 시간·로깅·레코드·설정 | orchestrator | 1 | - | waiting |
-| 3 | C-01/02/06, F-01 | 계약 v1, 공용 합성 픽스처 | orchestrator | 2 | - | waiting |
-| 4 | D-DAT-01 | DB 연결·스키마·시드 | dev-data | 3 | A | waiting |
-| 5 | D-COL-01 | ITS 어댑터, `run_once` | dev-collector | 3 | A | waiting |
-| 7 | D-ML-00 | 현재 속도 유지 예측 | dev-ml | 3 | A | waiting |
-| 8 | D-DSH-00 | 대시보드 v0 | dev-dashboard | 3 | A | waiting |
-| 6 | D-DAT-02a | 5분 구간 집계 v0 | dev-data | 4 | B | waiting |
-| 9 | D-COL-02 | 스케줄러 | dev-collector | 5 | B | waiting |
-| 10 | I-01 | 통합 시험, 실제 호출, 상시 수집 시작 | orchestrator + 사람 | 6, 7, 8, 9 | - | waiting |
+| 1 | T-00 | 저장소 초기화, 문서 갱신 | orchestrator | - | - | done |
+| 2 | T-01 | 공용 시간·로깅·레코드·설정 | orchestrator | 1 | - | done |
+| 3 | C-01/02/06, F-01 | 계약 v1, 공용 합성 픽스처 | orchestrator | 2 | - | done |
+| 4 | D-DAT-01 | DB 연결·스키마·시드 | dev-data | 3 | A | done |
+| 5 | D-COL-01 | ITS 어댑터, `run_once` | dev-collector | 3 | A | done |
+| 7 | D-ML-00 | 현재 속도 유지 예측 | dev-ml | 3 | A | done |
+| 8 | D-DSH-00 | 대시보드 v0 | dev-dashboard | 3 | A | done |
+| 6 | D-DAT-02a | 5분 구간 집계 v0 | dev-data | 4 | B | done |
+| 9 | D-COL-02 | 스케줄러 | dev-collector | 5 | B | done |
+| 10 | I-01 | 통합 시험, 실제 호출, 상시 수집 시작 | orchestrator + 사람 | 6, 7, 8, 9 | - | in_progress — 실제 호출·전체 흐름 확인 완료(2026-11-19), 남은 일: [사람] 작업 스케줄러 등록·절전 해제·대시보드 화면 확인, 3일 연속 성공률 95% |
+
+### Slice 1 후보 (리뷰에서 나온 후속 과제)
+
+| 출처 | 내용 |
+|---|---|
+| Task 7 리뷰 | skipped 예측 행이 같은 base_time의 늦은 정상 예측을 막음(INSERT OR IGNORE) → skipped만 덮어쓰기 |
+| Task 7 리뷰 | backfill 조회 범위 제한, 예외 시 rollback |
+| Task 8 리뷰 | degraded 예측 회색 표시, 구간별 지연 판단, 수집 시각 별도 표시 |
+| Task 6 | 70% 부분 관측 기준, forward fill(2 bin), 측도 `speed_side` |
+| 실측 | `partial` 원인: 부모 링크가 체인에 없는 4140068801(S3 본선)·4150149001(S6 측도) — ITS 응답에서 대응 링크 확인 |
+| 실측 | ITS 응답 6,792건 중 창원대로 37건만 필요 — 조회 범위(bbox)를 창원대로 좌표로 좁혀 저장량 축소 |
 
 ## 다음 슬라이스 (계획 작성 전)
 
@@ -52,3 +63,6 @@
 | 2026-11-18 | R-01, R-02 | 경찰청 API는 링크 데이터가 아닐 가능성이 높아, 첫 수집원을 ITS로 바꾼다 | Slice 0 계획에 반영 |
 | 2026-11-18 | R-05 | `calendar_info`의 방학·휴가 컬럼에서 DEFAULT 0을 빼고 NULL 허용 | C-01 v1에 반영 예정 (Task 3) |
 | 2026-11-18 | 실행 | 소유 경로가 다른 dev 작업은 병렬로 실행하고, 커밋은 오케스트레이터만 한다(AGENTS.md 우선) | Ruling |
+| 2026-11-18 | R-03b | 8구간 후보를 6구간(S1~S6)+참고 S0로 재편 | SPEC v1.3 |
+| 2026-11-18 | Task 5 리뷰 | `segment_link.source`는 링크 ID 체계 출처, 수집원별로 거르지 않음 | C-01 v1.1, Ruling |
+| 2026-11-19 | 첫 ITS 실측 | ITS가 창원대로를 제공함(창원 bbox 6,792 링크 중 창원대로 37개). ITS는 분할 전 링크(끝 00) 단위로 값을 주며 `속도×통행시간` 역산 길이가 분할 링크 길이 합과 일치 → 분할 링크를 부모에 합쳐 링크 39개로 재구성(`config/build_segment_links.py`). 첫 실측 DB는 `data/traffic_firstfetch_20261119.db`로 보관 | Ruling |

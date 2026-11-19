@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import csv
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -61,8 +62,12 @@ def test_empty_links_csv_ok(conn: sqlite3.Connection, tmp_path: Path) -> None:
 def test_load_real_links_csv(conn: sqlite3.Connection) -> None:
     """실제 `config/segment_links.csv`(표준노드링크 2026-11-11, R-03b)가 오류 없이 적재되는지 확인한다."""
     real_csv = Path(__file__).resolve().parents[2] / "config" / "segment_links.csv"
-    assert load(conn, SEGMENTS, real_csv) == (7, 86)
-    assert _count(conn, "segment_link") == 86
+    with open(real_csv, encoding="utf-8-sig", newline="") as f:
+        n_rows = sum(1 for _ in csv.DictReader(f))
+    assert n_rows > 0
+    assert load(conn, SEGMENTS, real_csv) == (len(SEGMENTS), n_rows)
+    # UPSERT 키(source, link_id, valid_from)가 중복된 행이 있으면 여기서 드러난다
+    assert _count(conn, "segment_link") == n_rows
     null_targets = conn.execute(
         "SELECT segment_id FROM road_segment WHERE is_target = 1 AND distance_m IS NULL"
     ).fetchall()

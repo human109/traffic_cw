@@ -52,3 +52,23 @@ def test_segment_links_match_segments() -> None:
     assert len({r["link_id"] for r in rows}) == len(rows)
     assert all(len(r["link_id"]) == 10 and r["link_id"].isdigit() for r in rows)
     assert all(r["valid_from"].endswith("+09:00") for r in rows)
+
+
+def test_segment_links_csv_is_build_output() -> None:
+    import csv
+    from pathlib import Path
+
+    from config.build_segment_links import DST, build
+
+    with Path(DST).open(encoding="utf-8", newline="") as f:
+        on_disk = [dict(r) for r in csv.DictReader(f)]
+    assert on_disk == [{k: str(v) for k, v in r.items()} for r in build()]
+
+
+def test_split_links_merged_into_parent() -> None:
+    from config.build_segment_links import build
+
+    rows = {r["link_id"]: r for r in build()}
+    # 4140114100 + 4140114102(282.3) + 4140114101(11.8) → 576.5m (첫 ITS 실측 역산 576.7m)
+    assert rows["4140114100"]["link_length_m"] == "576.5"
+    assert "4140114102" not in rows and "4140114101" not in rows
