@@ -23,6 +23,8 @@ class ObservationRecord:
     congestion_code: str | None
     quality_flag: str = "ok"
     raw_file: str | None = None
+    # 원본의 도로명(ITS roadName). DB에는 저장하지 않고 저장 범위 판정에만 쓴다 (C-02 v2).
+    road_name: str | None = None
 
 
 @dataclass
