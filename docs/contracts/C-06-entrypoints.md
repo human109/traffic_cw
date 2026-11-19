@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 상태 | frozen |
-| 버전 | v2 |
+| 버전 | v2.1 |
 | 영향 받는 에이전트 | 전체 |
 | 계약 테스트 | 각 모듈 테스트 + `tests/integration/` |
 
@@ -28,10 +28,12 @@
 - `now`·`until`이 timezone 정보가 없는 datetime이면 `ValueError`를 낸다.
 - `conn=None`이면 `database.db.connect()`로 연결하고 함수가 끝날 때 닫는다. `conn`을 받으면 닫지 않는다.
 - 쓰기를 하는 진입점은 함수 안에서 commit한다.
+- 테스트·재현용 키워드 전용 인자는 위 시그니처 뒤에 추가할 수 있다: `collector.run_once(..., *, settings=None, clock=now_kst)`(v2.1).
 
 ## 변경 이력
 
 | 버전 | 일자 | 변경 | CR 출처 |
 |---|---|---|---|
+| v2.1 | 2026-11-20 | `collector.run_once`에 키워드 전용 `settings`, `clock` 확장 명시 | Slice 1 Task 6 |
 | v2 | 2026-11-19 | `prediction.evaluate`, `scripts.load_calendar.load`, `connect(create=)` 추가 | Slice 1 계획, Slice 0 최종 리뷰 M3 |
 | v1 | 2026-11-18 | Slice 0 진입점 확정 | Slice 0 계획 |

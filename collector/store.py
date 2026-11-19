@@ -15,14 +15,22 @@ from common.records import CollectionResult, ObservationRecord
 from common.timeutil import KST, to_iso
 
 
-def save_raw(body: bytes, source: str, collected_at: datetime, raw_dir: Path) -> Path:
-    """원본 응답을 `raw_dir/{source}/{YYYYMMDD}/{HHMMSS}.xml.gz`로 gzip 저장하고 경로를 돌려준다.
+def raw_path(raw_dir: Path | str, source: str, collected_at: datetime) -> Path:
+    """원본 파일 경로 `{raw_dir}/{source}/{YYYYMMDD}/{HHMMSS}.xml.gz`를 돌려준다.
 
-    같은 초에 다시 저장하면 덮어쓴다.
+    저장 전에 같은 경로 파일이 이미 있었는지 확인하는 용도로도 쓴다 (M2).
     """
     to_iso(collected_at)  # tz 없는 datetime 거부
     k = collected_at.astimezone(KST)
-    path = Path(raw_dir) / source / k.strftime("%Y%m%d") / f"{k.strftime('%H%M%S')}.xml.gz"
+    return Path(raw_dir) / source / k.strftime("%Y%m%d") / f"{k.strftime('%H%M%S')}.xml.gz"
+
+
+def save_raw(body: bytes, source: str, collected_at: datetime, raw_dir: Path) -> Path:
+    """원본 응답을 `raw_path` 경로로 gzip 저장하고 경로를 돌려준다.
+
+    같은 초에 다시 저장하면 덮어쓴다.
+    """
+    path = raw_path(raw_dir, source, collected_at)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(gzip.compress(body))
     return path

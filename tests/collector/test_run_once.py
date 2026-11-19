@@ -5,8 +5,9 @@ from __future__ import annotations
 import gzip
 import logging
 import sqlite3
+from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,11 @@ from config.settings import Settings
 
 NOW = datetime(2026, 11, 16, 7, 0, 40, tzinfo=KST)
 SYN_ROAD = "합성도로"
+
+
+def _at(t: datetime) -> Callable[[], datetime]:
+    """항상 `t`를 반환하는 시계. `run_once(..., clock=_at(NOW))`처럼 시각을 고정한다."""
+    return lambda: t
 
 
 @pytest.fixture
@@ -69,7 +75,7 @@ def test_success_stores_records_and_raw(fixture_conn: sqlite3.Connection, settin
         "UPDATE segment_link SET valid_to='2026-02-01T00:00:00+09:00' WHERE link_id='SYN0000000'"
     )
     adapter = FakeAdapter(settings, FetchResult(its_sample_xml, 200, None))
-    result = run_once(NOW, fixture_conn, adapter, settings=settings)
+    result = run_once(NOW, fixture_conn, adapter, settings=settings, clock=_at(NOW))
     assert result.status == "success"
     assert result.links_expected == 5
     assert result.links_received == 5
@@ -117,14 +123,79 @@ def test_partial_response_logs_partial(fixture_conn: sqlite3.Connection, setting
 
 def test_repeat_fetch_no_update(fixture_conn: sqlite3.Connection, settings: Settings, its_sample_xml: bytes) -> None:
     adapter = FakeAdapter(settings, FetchResult(its_sample_xml, 200, None))
-    first = run_once(NOW, fixture_conn, adapter, settings=settings)
+    first = run_once(NOW, fixture_conn, adapter, settings=settings, clock=_at(NOW))
     assert first.record_count == 5
     before = _obs_count(fixture_conn)
-    second = run_once(NOW.replace(minute=1), fixture_conn, adapter, settings=settings)
+    second = run_once(NOW.replace(minute=1), fixture_conn, adapter, settings=settings, clock=_at(NOW.replace(minute=1)))
     assert second.status == "no_update"
     assert second.record_count == 0
     assert _obs_count(fixture_conn) == before
     assert [r["status"] for r in _logs(fixture_conn)] == ["partial", "no_update"]
+
+
+def test_collected_at_is_fetch_end_time(fixture_conn: sqlite3.Connection, settings: Settings, its_sample_xml: bytes) -> None:
+    """I5: collected_at은 fetch가 끝난 시각이다. fetch 중 시계가 30초 진행하면 now+30초."""
+    clock = [NOW]
+
+    class _SlowAdapter(FakeAdapter):
+        def fetch(self, now: datetime) -> FetchResult:
+            clock[0] = clock[0] + timedelta(seconds=30)
+            return super().fetch(now)
+
+    adapter = _SlowAdapter(settings, FetchResult(its_sample_xml, 200, None))
+    result = run_once(NOW, fixture_conn, adapter, settings=settings, clock=lambda: clock[0])
+    row = fixture_conn.execute(
+        "SELECT collected_at, raw_file FROM traffic_observation WHERE source='its' AND link_id='SYN0000001'"
+    ).fetchone()
+    assert row["collected_at"] == "2026-11-16T07:01:10+09:00"  # NOW + 30초
+    raw = Path(row["raw_file"])
+    assert raw == Path(settings.raw_dir) / "its" / "20261116" / "070110.xml.gz"  # 수신 시각 기준 경로
+    # started_at은 넘겨받은 now 그대로다.
+    assert result.started_at == NOW
+    assert _logs(fixture_conn)[0]["started_at"] == "2026-11-16T07:00:40+09:00"
+
+
+def test_naive_clock_fails_not_crashes(fixture_conn: sqlite3.Connection, settings: Settings, its_sample_xml: bytes) -> None:
+    """clock이 timezone 정보 없는 datetime을 반환하면 그 회차는 failed다(예외 밖으로 새지 않음)."""
+    adapter = FakeAdapter(settings, FetchResult(its_sample_xml, 200, None))
+    result = run_once(
+        NOW, fixture_conn, adapter, settings=settings, clock=lambda: datetime(2026, 11, 16, 7, 0, 50)
+    )
+    assert result.status == "failed"
+    assert "timezone" in (result.error_message or "")
+    assert _obs_count(fixture_conn) == 0
+
+
+def test_no_update_does_not_rewrite_raw(fixture_conn: sqlite3.Connection, settings: Settings, its_sample_xml: bytes) -> None:
+    """M2: 모든 레코드가 이미 저장된 회차(no_update)는 원본 파일을 새로 쓰지 않는다."""
+    adapter = FakeAdapter(settings, FetchResult(its_sample_xml, 200, None))
+    first = run_once(NOW, fixture_conn, adapter, settings=settings, clock=_at(NOW))
+    assert first.record_count == 5
+    first_raw = Path(settings.raw_dir) / "its" / "20261116" / "070040.xml.gz"
+    assert first_raw.exists()
+
+    later = NOW + timedelta(minutes=1)
+    second = run_once(later, fixture_conn, adapter, settings=settings, clock=_at(later))
+    assert second.status == "no_update"
+    # 이번 회차(070140) 파일은 만들어지지 않고, 직전 회차 파일은 그대로다.
+    assert not (Path(settings.raw_dir) / "its" / "20261116" / "070140.xml.gz").exists()
+    assert first_raw.exists()
+    assert gzip.decompress(first_raw.read_bytes()) == its_sample_xml
+
+
+def test_no_update_keeps_previous_raw_same_second(
+    fixture_conn: sqlite3.Connection, settings: Settings, its_sample_xml: bytes
+) -> None:
+    """M2: 같은 초에 이미 원본이 있으면(직전 회차 파일을 덮어쓴 상황) 지우지 않는다."""
+    adapter = FakeAdapter(settings, FetchResult(its_sample_xml, 200, None))
+    run_once(NOW, fixture_conn, adapter, settings=settings, clock=_at(NOW))
+    raw = Path(settings.raw_dir) / "its" / "20261116" / "070040.xml.gz"
+    before = raw.read_bytes()
+
+    second = run_once(NOW, fixture_conn, adapter, settings=settings, clock=_at(NOW))
+    assert second.status == "no_update"
+    assert raw.exists()
+    assert raw.read_bytes() == before
 
 
 def test_auth_error(fixture_conn: sqlite3.Connection, settings: Settings) -> None:
@@ -153,7 +224,7 @@ def test_parse_failure_saves_raw(fixture_conn: sqlite3.Connection, settings: Set
         b"<response><header><resultCode>99</resultCode><resultMsg>SYNTHETIC ERROR</resultMsg></header></response>"
     )
     adapter = FakeAdapter(settings, FetchResult(body, 200, None))
-    result = run_once(NOW, fixture_conn, adapter, settings=settings)
+    result = run_once(NOW, fixture_conn, adapter, settings=settings, clock=_at(NOW))
     assert result.status == "failed"
     assert result.record_count == 0
     assert "SYNTHETIC ERROR" in (result.error_message or "")
@@ -209,7 +280,7 @@ def test_store_scope_only_target_road(fixture_conn: sqlite3.Connection, settings
         ("SYN0000903", "다른도로"),
     ]
     body = _road_xml(roads)
-    result = run_once(NOW, fixture_conn, FakeAdapter(settings, FetchResult(body, 200, None)), settings=settings)
+    result = run_once(NOW, fixture_conn, FakeAdapter(settings, FetchResult(body, 200, None)), settings=settings, clock=_at(NOW))
     assert result.record_count == 2
     assert result.status == "partial"  # 대상 링크 6개 중 2개
     assert result.links_received == 2
@@ -221,7 +292,8 @@ def test_store_scope_only_target_road(fixture_conn: sqlite3.Connection, settings
 
 
 def test_no_store_road_failed(fixture_conn: sqlite3.Connection, settings: Settings) -> None:
-    body = _road_xml([("SYN0000001", "다른도로"), ("SYN0000002", "다른도로")])
+    # 대상 링크는 도로명과 무관하게 저장되므로(M1), 도로 필터만 보려면 대상 밖 link_id를 쓴다.
+    body = _road_xml([("SYN0000901", "다른도로"), ("SYN0000902", "다른도로")])
     result = run_once(NOW, fixture_conn, FakeAdapter(settings, FetchResult(body, 200, None)), settings=settings)
     assert result.status == "failed"
     assert result.record_count == 0
@@ -230,8 +302,22 @@ def test_no_store_road_failed(fixture_conn: sqlite3.Connection, settings: Settin
     assert _logs(fixture_conn)[0]["error_message"] == "저장 대상 도로 item 없음"
 
 
+def test_store_scope_keeps_target_link_from_other_road(fixture_conn: sqlite3.Connection, settings: Settings) -> None:
+    """M1: 대상 링크는 도로명이 저장 대상이 아니어도 저장한다."""
+    body = _road_xml([("SYN0000001", "다른도로"), ("SYN0000901", "다른도로")])
+    result = run_once(
+        NOW, fixture_conn, FakeAdapter(settings, FetchResult(body, 200, None)), settings=settings, clock=_at(NOW)
+    )
+    ids = {r[0] for r in fixture_conn.execute("SELECT link_id FROM traffic_observation WHERE source='its'")}
+    assert ids == {"SYN0000001"}  # SYN0000901은 대상 링크도, 저장 대상 도로도 아니다
+    assert result.record_count == 1
+    assert result.status == "partial"
+
+
 def test_default_store_road_excludes_fixture(fixture_conn: sqlite3.Connection, tmp_path: Path, its_sample_xml: bytes) -> None:
     # 기본 설정("창원대로")으로는 합성도로 응답을 저장하지 않는다.
+    # 단 대상 링크는 도로명과 무관하게 저장되므로(M1), 대상 링크가 없는 상태에서 본다.
+    fixture_conn.execute("DELETE FROM segment_link")
     s = Settings(its_api_key="TESTKEY", raw_dir=str(tmp_path / "raw"))
     result = run_once(NOW, fixture_conn, FakeAdapter(s, FetchResult(its_sample_xml, 200, None)), settings=s)
     assert result.status == "failed"

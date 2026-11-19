@@ -1,6 +1,7 @@
-"""파이프라인 스케줄러 (SPEC 7.6). 실행: `python -m collector.scheduler [--once]`.
+"""파이프라인·평가 스케줄러 (SPEC 7.6). 실행: `python -m collector.scheduler [--once] [--evaluate]`.
 
 수집 → 전처리 → 실제값 갱신 → 예측 순서로 각 모듈의 C-06 진입점만 호출한다. 내부 함수는 import하지 않는다.
+상주 실행 시 job 2개: 파이프라인(매 5분 xx:x0:30/xx:x5:30)과 일일 평가(매일 10:05:00 KST).
 """
 
 from __future__ import annotations
@@ -19,12 +20,18 @@ from common.records import CollectionResult
 from common.timeutil import KST, now_kst, require_aware, to_iso
 from config.settings import Settings
 
-log = get_logger(__name__)
+# M7: `python -m collector.scheduler`로 실행하면 `__name__`이 `__main__`이 되므로 이름을 고정한다.
+log = get_logger("collector.scheduler")
 
 Step = Callable[[datetime], object]
 
 JOB_ID = "pipeline"
+JOB_ID_EVALUATE = "evaluate"
 CRON_SECOND = 30  # 매 회차 xx:x0:30 / xx:x5:30. 갱신 직후 원본이 준비될 시간을 둔다.
+# 일일 평가 job (Slice 1 Task 6). 매일 10:05:00 KST에 최근 7일을 평가한다(C-06 evaluate 기본 days=7).
+EVAL_HOUR = 10
+EVAL_MINUTE = 5
+EVAL_SECOND = 0
 
 
 def _as_step(fn: Callable[..., object], arg_name: str) -> Step:
@@ -121,14 +128,32 @@ def _scheduled_job() -> None:
         log.error("파이프라인 실행 실패: %s", _masked(e))
 
 
-def build_scheduler(settings: Settings) -> BlockingScheduler:
-    """파이프라인 job 하나를 등록한 `BlockingScheduler`를 만든다(시작하지 않음).
+def _evaluate_once(now: datetime) -> int:
+    """평가 진입점을 1회 실행한다. 진입점은 호출 시점에 지연 import한다 (C-06 v2)."""
+    import prediction
 
-    - CronTrigger(minute=settings.collect_cron_minute, second=30, timezone=KST)
-    - max_instances=1: 이전 회차가 끝나지 않았으면 겹쳐 실행하지 않는다.
-    - coalesce=True: 밀린 회차는 1회로 합친다.
-    - misfire_grace_time=settings.scheduler_misfire_grace_s: 예정 시각에서 이 초 안에 깨어나면 실행하고,
-      더 늦으면(PC 절전 등) 건너뛰고 다음 회차를 기다린다.
+    return prediction.evaluate(now)
+
+
+def _scheduled_evaluate_job() -> None:
+    """스케줄러가 매일 10:05 호출한다. 파이프라인 job과 같은 예외 내성·키 가리기를 쓴다."""
+    try:
+        count = _evaluate_once(now_kst())
+    except Exception as e:
+        log.error("평가 실행 실패: %s", _masked(e))
+        return
+    log.info("평가 완료: model_evaluation %d행", count)
+
+
+def build_scheduler(settings: Settings) -> BlockingScheduler:
+    """파이프라인 job과 일일 평가 job을 등록한 `BlockingScheduler`를 만든다(시작하지 않음).
+
+    - 파이프라인: CronTrigger(minute=settings.collect_cron_minute, second=30, timezone=KST)
+    - 평가: CronTrigger(hour=10, minute=5, second=0, timezone=KST), `prediction.evaluate(now, days=7)`
+    - 두 job 모두 max_instances=1(이전 실행이 끝나지 않으면 겹쳐 실행하지 않음),
+      coalesce=True(밀린 회차는 1회로 합침),
+      misfire_grace_time=settings.scheduler_misfire_grace_s(예정 시각에서 이 초 안에 깨어나면 실행하고,
+      더 늦으면 PC 절전 등 건너뛴다).
     """
     sched = BlockingScheduler(timezone=KST)
     sched.add_job(
@@ -139,16 +164,26 @@ def build_scheduler(settings: Settings) -> BlockingScheduler:
         coalesce=True,
         misfire_grace_time=settings.scheduler_misfire_grace_s,
     )
+    sched.add_job(
+        _scheduled_evaluate_job,
+        CronTrigger(hour=EVAL_HOUR, minute=EVAL_MINUTE, second=EVAL_SECOND, timezone=KST),
+        id=JOB_ID_EVALUATE,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=settings.scheduler_misfire_grace_s,
+    )
     return sched
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`--once`이면 파이프라인을 1회 실행하고 끝낸다(`"error: "`로 시작하는 단계가 하나라도 있으면 1, 아니면 0).
+    """`--once`이면 파이프라인을, `--evaluate`이면 평가를 1회 실행하고 끝낸다.
 
-    인자가 없으면 스케줄러를 상주 실행한다(Ctrl+C로 종료, 0 반환).
+    둘 다 주면 순서대로 실행한다. 파이프라인 단계 하나라도 `"error: "`로 시작하면, 또는 평가에서
+    예외가 나면 1, 아니면 0을 반환한다. 인자가 없으면 스케줄러를 상주 실행한다(Ctrl+C로 종료, 0 반환).
     """
     parser = argparse.ArgumentParser(prog="python -m collector.scheduler", description="수집·전처리·예측 파이프라인")
     parser.add_argument("--once", action="store_true", help="파이프라인을 1회 실행하고 끝낸다")
+    parser.add_argument("--evaluate", action="store_true", help="평가(prediction.evaluate)를 1회 실행하고 끝난다")
     args = parser.parse_args(argv)
 
     if args.once:
@@ -157,19 +192,32 @@ def main(argv: list[str] | None = None) -> int:
         if failed:
             log.warning("파이프라인 1회 실행 중 실패한 단계: %s", failed)
             return 1
-        return 0
+        if not args.evaluate:
+            return 0
 
-    from config.settings import get_settings
+    if args.evaluate:
+        try:
+            count = _evaluate_once(now_kst())
+        except Exception as e:
+            log.error("평가 1회 실행 실패: %s", _masked(e))
+            return 1
+        log.info("평가 1회 실행: model_evaluation %d행", count)
 
-    settings = get_settings()
-    sched = build_scheduler(settings)
-    log.info("스케줄러 시작: minute=%s second=%d (KST)", settings.collect_cron_minute, CRON_SECOND)
-    try:
-        sched.start()
-    except (KeyboardInterrupt, SystemExit):
-        if sched.running:
-            sched.shutdown(wait=False)
-        log.info("스케줄러 종료")
+    if not args.once and not args.evaluate:
+        from config.settings import get_settings
+
+        settings = get_settings()
+        sched = build_scheduler(settings)
+        log.info(
+            "스케줄러 시작: 파이프라인 minute=%s second=%d, 평가 매일 %02d:%02d:%02d (KST)",
+            settings.collect_cron_minute, CRON_SECOND, EVAL_HOUR, EVAL_MINUTE, EVAL_SECOND,
+        )
+        try:
+            sched.start()
+        except (KeyboardInterrupt, SystemExit):
+            if sched.running:
+                sched.shutdown(wait=False)
+            log.info("스케줄러 종료")
     return 0
 
 

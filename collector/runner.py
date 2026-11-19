@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from collector.base import FetchResult, SourceAdapter
 from collector.its import ItsAdapter, mask_secret
-from collector.store import insert_observations, log_collection, save_raw
+from collector.store import insert_observations, log_collection, raw_path, save_raw
 from common.logsetup import get_logger
 from common.records import CollectionResult, CollectionStatus, ObservationRecord
-from common.timeutil import to_iso
+from common.timeutil import now_kst, require_aware, to_iso
 from config.settings import Settings
 
 log = get_logger(__name__)
@@ -22,17 +23,23 @@ NO_ITEMS_ERROR = "응답에 읽을 수 있는 item 없음"
 NO_STORE_ROAD_ERROR = "저장 대상 도로 item 없음"
 
 
-def _store_scope(records: list[ObservationRecord], source: str, settings: Settings) -> list[ObservationRecord]:
-    """DB에 저장할 레코드만 남긴다 (C-02 v2 저장 범위).
+def _store_scope(
+    records: list[ObservationRecord],
+    source: str,
+    settings: Settings,
+    targets: frozenset[str] | set[str],
+) -> list[ObservationRecord]:
+    """DB에 저장할 레코드만 남긴다 (C-02 v2 + Slice 0 리뷰 M1 저장 범위).
 
-    ITS는 `road_name`이 `settings.its_store_road_names`에 속하는 레코드만 저장한다.
-    원본 파일은 응답 전체를 보관하므로 다른 도로는 원본에서 재적재할 수 있다.
+    ITS는 `road_name`이 `settings.its_store_road_names`에 속하거나 **또는** `link_id`가
+    현재 유효한 대상 링크(`segment_link`)인 레코드만 저장한다. 대상 링크는 도로명과 무관하게
+    구간 집계에 필요하다. 원본 파일은 응답 전체를 보관하므로 나머지는 원본에서 재적재할 수 있다.
     다른 수집원은 아직 저장 범위 규칙이 없어 그대로 둔다.
     """
     if source != "its":
         return records
     allowed = set(settings.its_store_road_names)
-    return [r for r in records if r.road_name in allowed]
+    return [r for r in records if r.road_name in allowed or r.link_id in targets]
 
 
 def _target_links(conn: sqlite3.Connection, now: datetime) -> set[str]:
@@ -52,7 +59,11 @@ def _target_links(conn: sqlite3.Connection, now: datetime) -> set[str]:
 
 
 def _collect(
-    now: datetime, conn: sqlite3.Connection, adapter: SourceAdapter, settings: Settings
+    now: datetime,
+    conn: sqlite3.Connection,
+    adapter: SourceAdapter,
+    settings: Settings,
+    clock: Callable[[], datetime],
 ) -> tuple[CollectionStatus, int | None, int | None, int, int, str | None]:
     """(status, http_status, links_expected, links_received, record_count, error) 를 돌려준다."""
     http_status: int | None = None
@@ -62,11 +73,20 @@ def _collect(
 
         fetched: FetchResult = adapter.fetch(now)
         http_status = fetched.http_status
+        # I5: collected_at은 응답을 실제로 받은(fetch가 끝난) 시각이다. 재시도로 오래 걸린 회차를
+        # 시작 시각으로 기록하면 `collected_at <= until` 미래 정보 금지 규칙(SPEC 6.6)을 해친다.
+        collected_at = clock()
+        require_aware(collected_at)
 
         raw_file: str | None = None
+        raw_saved: Path | None = None
+        raw_existed = False
         if fetched.body:
             try:
-                raw_file = str(save_raw(fetched.body, adapter.name, now, Path(settings.raw_dir)))
+                path = raw_path(Path(settings.raw_dir), adapter.name, collected_at)
+                raw_existed = path.exists()
+                raw_saved = save_raw(fetched.body, adapter.name, collected_at, Path(settings.raw_dir))
+                raw_file = str(raw_saved)
             except OSError as e:
                 log.error("원본 저장 실패: %s", e)
 
@@ -75,11 +95,11 @@ def _collect(
         if fetched.error is not None or fetched.body is None:
             return "failed", http_status, expected, 0, 0, fetched.error or "빈 응답"
 
-        records: list[ObservationRecord] = adapter.parse(fetched.body, now)
+        records: list[ObservationRecord] = adapter.parse(fetched.body, collected_at)
         if not records:
             # resultCode=0이어도 읽을 레코드가 없으면 실패다. no_update는 "읽었지만 모두 이미 저장됨"만 뜻한다.
             return "failed", http_status, expected, 0, 0, NO_ITEMS_ERROR
-        records = _store_scope(records, adapter.name, settings)
+        records = _store_scope(records, adapter.name, settings, targets)
         if not records:
             return "failed", http_status, expected, 0, 0, NO_STORE_ROAD_ERROR
         if raw_file is not None:
@@ -89,6 +109,15 @@ def _collect(
 
         inserted = insert_observations(conn, records)
         if inserted == 0:
+            # M2: 응답의 모든 레코드가 이미 DB에 있으면(같은 createdDate 반복 조회) 원본 파일을
+            # 다시 쓰지 않는다. 이번 회차에 새로 쓴 파일만 지운다. 같은 초에 직전 회차 파일이
+            # 덮어써진 경우에는 지우지 않아 직전 원본을 보존한다.
+            # 파싱 실패 등 진단이 필요한 회차는 위에서 저장한 원본을 그대로 둔다.
+            if raw_saved is not None and not raw_existed:
+                try:
+                    raw_saved.unlink()
+                except OSError as e:
+                    log.error("원본 파일 삭제 실패: %s", e)
             return "no_update", http_status, expected, received, 0, None
         if targets and not targets <= received_ids:
             missing = len(targets - received_ids)
@@ -108,6 +137,7 @@ def run_once(
     adapter: SourceAdapter | None = None,
     *,
     settings: Settings | None = None,
+    clock: Callable[[], datetime] = now_kst,
 ) -> CollectionResult:
     """수집을 1회 실행하고 `collection_log`에 결과를 남긴다.
 
@@ -120,6 +150,12 @@ def run_once(
     - 준비 단계(`get_settings()`, adapter 생성, DB 연결)의 예외도 던지지 않고 `failed`를 반환한다.
       이때 DB 연결을 얻지 못했으면 `collection_log` 기록은 생략하고 에러 로그만 남긴다.
     - C-06 시그니처에 더해 키워드 전용 `settings`를 받는다(테스트에서 raw_dir 등을 바꾸기 위함).
+    - 키워드 전용 `clock`은 레코드의 `collected_at`(응답 수신 시각)을 얻는 함수다. 기본은 실제
+      시각(`now_kst`)이고, 넘겨받은 `now`는 `started_at`과 대상 링크 유효 판정에만 쓴다.
+      `clock`이 timezone 정보 없는 datetime을 반환하면 그 회차는 `failed`가 된다. 테스트에서
+      이 인자로 시계를 고정한다.
+    - `no_update` 회차(응답의 모든 레코드가 이미 저장됨)는 원본 파일을 새로 쓰지 않는다.
+      파싱 실패 등 진단이 필요한 회차는 원본을 저장한다.
     """
     to_iso(now)  # tz 없는 datetime 거부
     started = time.monotonic()
@@ -180,7 +216,7 @@ def run_once(
             log.error("%s", message)
             return _finish("failed", None, None, 0, 0, message)
 
-        return _finish(*_collect(now, conn, adapter, settings))
+        return _finish(*_collect(now, conn, adapter, settings, clock))
     finally:
         if own_conn and conn is not None:
             conn.close()

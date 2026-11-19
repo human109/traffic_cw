@@ -47,6 +47,7 @@ def test_fixture_end_to_end(fixture_conn: sqlite3.Connection, its_sample_xml: by
         conn=fixture_conn,
         adapter=_FixtureAdapter(settings, its_sample_xml),
         settings=settings,
+        clock=lambda: datetime(2026, 11, 16, 7, 0, 40, tzinfo=KST),  # I5: 기본 시계는 실제 시각이라 고정한다
     )
     assert result.status in ("success", "partial")
     assert result.record_count == 5

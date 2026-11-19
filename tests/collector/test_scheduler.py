@@ -132,6 +132,55 @@ def test_scheduled_job_swallows_errors(
     assert FAKE_KEY not in caplog.text
 
 
+def test_evaluate_once_calls_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """평가 job은 C-06 진입점 `prediction.evaluate`만 호출한다."""
+    import prediction
+
+    seen: list[datetime] = []
+    monkeypatch.setattr(prediction, "evaluate", lambda now, conn=None, days=7: seen.append(now) or 7)
+    assert scheduler._evaluate_once(NOW) == 7
+    assert seen == [NOW]
+
+
+def test_scheduled_evaluate_job_swallows_errors(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def boom(now: datetime) -> int:
+        raise RuntimeError(f"synthetic evaluate failure {FAKE_KEY}")
+
+    monkeypatch.setattr(scheduler, "_evaluate_once", boom)
+    assert scheduler._scheduled_evaluate_job() is None  # 예외 없이 정상 반환
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors
+    assert "RuntimeError" in caplog.text
+    assert FAKE_KEY not in caplog.text  # 키 가리기
+
+
+def test_main_evaluate_runs_only_evaluate(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipeline_calls: list[datetime] = []
+    evaluate_calls: list[datetime] = []
+    monkeypatch.setattr(scheduler, "run_pipeline", lambda now, steps=None: pipeline_calls.append(now) or {})
+    monkeypatch.setattr(scheduler, "_evaluate_once", lambda now: evaluate_calls.append(now) or 3)
+    assert main(["--evaluate"]) == 0
+    assert pipeline_calls == []  # 파이프라인은 호출하지 않는다
+    assert len(evaluate_calls) == 1
+    assert evaluate_calls[0].utcoffset() == KST.utcoffset(None)
+
+
+def test_main_evaluate_failure_exit_code(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def boom(now: datetime) -> int:
+        raise RuntimeError(f"synthetic evaluate failure {FAKE_KEY}")
+
+    monkeypatch.setattr(scheduler, "_evaluate_once", boom)
+    assert main(["--evaluate"]) == 1
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors
+    assert "RuntimeError" in caplog.text
+    assert FAKE_KEY not in caplog.text
+
+
 def test_naive_now_rejected() -> None:
     calls: list[tuple[str, datetime]] = []
     with pytest.raises(ValueError):
@@ -157,19 +206,31 @@ def test_default_steps_use_entrypoints() -> None:
     ]
 
 
-def test_build_scheduler_job() -> None:
+def test_build_scheduler_jobs() -> None:
     settings = Settings(collect_cron_minute="*/5")
     sched = build_scheduler(settings)
-    jobs = sched.get_jobs()
-    assert len(jobs) == 1
-    job = jobs[0]
-    fields = {f.name: str(f) for f in job.trigger.fields}
+    jobs = {job.id: job for job in sched.get_jobs()}
+    assert set(jobs) == {"pipeline", "evaluate"}  # job 2개
+
+    pipeline = jobs["pipeline"]
+    fields = {f.name: str(f) for f in pipeline.trigger.fields}
     assert fields["minute"] == "*/5"
     assert fields["second"] == "30"
-    assert job.trigger.timezone.utcoffset(None) == KST.utcoffset(None)
-    assert job.max_instances == 1
-    assert job.coalesce is True
-    assert job.misfire_grace_time == settings.scheduler_misfire_grace_s
+    assert pipeline.trigger.timezone.utcoffset(None) == KST.utcoffset(None)
+    assert pipeline.max_instances == 1
+    assert pipeline.coalesce is True
+    assert pipeline.misfire_grace_time == settings.scheduler_misfire_grace_s
+
+    evaluate = jobs["evaluate"]
+    fields = {f.name: str(f) for f in evaluate.trigger.fields}
+    assert fields["hour"] == "10"
+    assert fields["minute"] == "5"
+    assert fields["second"] == "0"
+    assert evaluate.trigger.timezone.utcoffset(None) == KST.utcoffset(None)
+    assert evaluate.max_instances == 1
+    assert evaluate.coalesce is True
+    assert evaluate.misfire_grace_time == settings.scheduler_misfire_grace_s
+    assert evaluate.func is scheduler._scheduled_evaluate_job
 
 
 def test_main_once(monkeypatch: pytest.MonkeyPatch) -> None:

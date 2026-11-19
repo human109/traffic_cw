@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 상태 | frozen |
-| 버전 | v2 |
+| 버전 | v2.1 |
 | 영향 받는 에이전트 | dev-collector, dev-data |
 | 계약 테스트 | `tests/contracts/test_fixtures.py` (픽스처가 이 형식을 따르는지) |
 
@@ -26,10 +26,10 @@
 
 `roadName`, `startNodeId`, `endNodeId` 등 나머지 필드는 원본 파일에만 남는다.
 
-**저장 범위 (v2)**: 원본 응답 파일(`data/raw/`)은 응답 전체를 보관한다. `traffic_observation`에는 `roadName`이 `settings.its_store_road_names`에 속하는 item만 저장한다(기본 `("창원대로",)`, 양방향 모두). 창원 bbox 응답(약 6,800개)을 모두 저장하면 하루 약 370MB가 쌓이기 때문이다. 다른 도로가 필요해지면 원본 파일에서 재적재한다.
+**저장 범위 (v2)**: 원본 응답 파일(`data/raw/`)은 응답 전체를 보관한다. `traffic_observation`에는 `roadName`이 `settings.its_store_road_names`에 속하거나(기본 `("창원대로",)`, 양방향 모두) `link_id`가 현재 유효한 대상 링크(`segment_link`)인 item만 저장한다(v2.1). 창원 bbox 응답(약 6,800개)을 모두 저장하면 하루 약 370MB가 쌓이기 때문이다. 다른 도로가 필요해지면 원본 파일에서 재적재한다.
 - 거르는 위치는 수집기다(어댑터 `parse`는 계속 모든 item을 레코드로 만든다).
 - `partial` 판정과 `links_received`는 지금처럼 대상 링크(`segment_link`) 기준이다.
-- `record_count`는 실제로 새로 저장한 행 수다. 응답에 item은 있으나 저장 대상 도로 item이 0개이면 `failed`("저장 대상 도로 item 없음")로 기록한다.
+- `record_count`는 실제로 새로 저장한 행 수다. 응답에 item은 있으나 저장 범위(도로명 또는 대상 링크)에 드는 item이 0개이면 `failed`("저장 대상 도로 item 없음")로 기록한다.
 
 **경찰청 UTIC (`source="police_utic"`)**: 응답 형식이 확인되지 않았다(R-01). 사람이 확인한 뒤 v2에서 추가한다.
 
@@ -48,5 +48,6 @@
 
 | 버전 | 일자 | 변경 | CR 출처 |
 |---|---|---|---|
+| v2.1 | 2026-11-20 | 저장 범위에 대상 링크 포함(도로명 OR 대상 링크). `collected_at`은 응답 수신 시각(`run_once`의 `clock`). 새 행이 0인 회차(`no_update`)는 원본 파일을 남기지 않음 | Slice 0 최종 리뷰 I5·M1·M2 |
 | v2 | 2026-11-19 | DB 저장 범위를 `its_store_road_names` 도로로 제한(원본 파일은 전체 보관). `ObservationRecord`에 `road_name` 필드 추가 | 첫 운영 저장량(1회 6,792행) |
 | v1 | 2026-11-18 | ITS 매핑, quality_flag 판정 확정 | R-01, R-02 |
