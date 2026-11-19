@@ -48,6 +48,24 @@ class Settings:
     grade_free_min_kmh: float = 40.0
     grade_slow_min_kmh: float = 20.0
 
+    # --- 전처리 (SPEC 6.2~6.4, Slice 1) ---
+    partial_min_coverage: float = 0.7  # 본선 길이 기준 관측 비율 하한
+    ffill_max_bins: int = 2  # 직전 값으로 채울 수 있는 연속 결측 bin 수
+    frozen_repeat_count: int = 6  # 원본 시각이 바뀌는 동안 같은 값이 이만큼 이어지면 갱신 정지
+
+    # --- 기준 모델·평가 (SPEC 8장, C-04) ---
+    recent_mean_minutes: int = 15
+    dow_mean_min_weeks: int = 3
+    backfill_lookback_hours: int = 6
+    eval_window: tuple[str, str] = ("07:00", "09:00")  # 대상 시각 기준, 양끝 포함
+    congestion_onset_drop: float = 0.3
+
+    # --- 달력 (R-05) ---
+    temp_holidays: tuple[str, ...] = ()  # 임시공휴일 YYYY-MM-DD (holidays 패키지 반영 전 보정)
+    # TODO(R-05): 2026은 언론 보도로 추정한 집단휴가 핵심 기간. 2027은 확인되면 추가한다.
+    industrial_vacations: tuple[tuple[str, str], ...] = (("2026-08-03", "2026-08-07"),)
+    school_vacations: tuple[tuple[str, str], ...] = ()
+
     collect_cron_minute: str = "*/5"
     # 예정 시각에서 이만큼 늦어도 그 회차를 실행한다. 절전 등으로 더 늦으면 건너뛰고 다음 회차부터 실행한다.
     scheduler_misfire_grace_s: int = 60

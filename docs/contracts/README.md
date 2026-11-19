@@ -9,7 +9,7 @@
 | C-01 | DB 스키마 | SPEC 5장 | frozen | v1 | 전체 | R-03, R-05 |
 | C-02 | 수집 원본 레코드 형식 | SPEC 4.3 | frozen | v1 (ITS) | dev-collector, dev-data | R-01, R-02 |
 | C-03 | 전처리 출력과 특성 | SPEC 6장, 7.3 | draft | v0 | dev-data, dev-ml | - |
-| C-04 | 예측 결과와 모델 등록 | SPEC 5.5~5.6, 7장 | draft | v0 | dev-ml, dev-dashboard, dev-publisher | - |
+| C-04 | 예측 결과와 모델 평가 | SPEC 5.5~5.6, 7~8장 | frozen | v1 | dev-ml, dev-dashboard, dev-publisher | - |
 | C-05 | 공개 JSON | SPEC 20.3 | draft | v0 | dev-publisher | R-07 |
 | C-06 | 모듈 공개 진입점 | SPEC 7.6 | frozen | v1 | 전체 | - |
 
