@@ -2,6 +2,7 @@
 description: 외부 사실(교통 API 스키마, 표준노드링크 링크 ID, 이용약관, 호스팅 등)을 출처와 함께 조사해 docs/research/에 기록한다. 코드는 수정하지 않는다.
 mode: subagent
 color: "#2bb673"
+model: opencode/longcat-2.5-free
 permissions:
   - action: edit
     resource: "*"

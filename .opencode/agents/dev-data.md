@@ -2,6 +2,7 @@
 description: DB 스키마·연결·저장소(database/), 전처리(preprocessing/), DB 스크립트(scripts/)를 개발한다. 5분 구간 집계, 이상치·결측 처리, as-of 특성 생성 담당.
 mode: subagent
 color: "#9b59b6"
+model: opencode/deepseek-v4.1-flash-free#high
 permissions:
   - action: edit
     resource: "*"

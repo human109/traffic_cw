@@ -2,6 +2,7 @@
 description: 내부 Streamlit 대시보드(dashboard/)를 개발한다. DB를 읽기 전용으로 사용한다.
 mode: subagent
 color: "#3498db"
+model: opencode/flint-40b-free#high
 permissions:
   - action: edit
     resource: "*"

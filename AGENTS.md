@@ -41,16 +41,40 @@
 
 # 2. 에이전트 역할과 소유권
 
-| 에이전트 | 모드 | 역할 | 수정 가능 경로 (소유) |
-|---|---|---|---|
-| `orchestrator` | primary | 작업 분해·배정, 계약 관리, 통합, 커밋, 문서 갱신 | `docs/**`, `config/**`, `common/**`, `tests/fixtures/**`, `tests/contracts/**`, `tests/integration/**`, `tests/common/**`, `tests/conftest.py`, 루트 문서(`*.md`), 루트 실행 스크립트(`run_*.ps1`), `pyproject.toml`, `requirements*.txt`, `.gitignore`, `.env.example` |
-| `researcher` | subagent | 외부 사실 조사, 출처 기록, SPEC 변경 제안 | `docs/research/**` |
-| `dev-collector` | subagent | 수집기, 스케줄러 | `collector/**`, `tests/collector/**` |
-| `dev-data` | subagent | DB 스키마·저장소, 전처리, DB 스크립트 | `database/**`, `preprocessing/**`, `scripts/**`, `tests/database/**`, `tests/preprocessing/**` |
-| `dev-ml` | subagent | 기준 모델, 학습, 예측, 평가 | `prediction/**`, `notebooks/**`, `tests/prediction/**` |
-| `dev-dashboard` | subagent | 내부 Streamlit 대시보드 | `dashboard/**`, `tests/dashboard/**` |
-| `dev-publisher` | subagent | (Phase 2) 공개 JSON 발행, 시민 공개 웹 | `publisher/**`, `web/**`, `tests/publisher/**` |
-| `reviewer` | subagent | 계약 준수·프로젝트 불변식 검토 (읽기 전용) | 없음 |
+| 에이전트 | 모드 | 모델 | 역할 | 수정 가능 경로 (소유) |
+|---|---|---|---|---|
+| `orchestrator` | primary | `claude-agent/opus#high` | 작업 분해·배정, 계약 관리, 통합, 커밋, 문서 갱신 | `docs/**`, `config/**`, `common/**`, `tests/fixtures/**`, `tests/contracts/**`, `tests/integration/**`, `tests/common/**`, `tests/conftest.py`, 루트 문서(`*.md`), 루트 실행 스크립트(`run_*.ps1`), `pyproject.toml`, `requirements*.txt`, `.gitignore`, `.env.example` |
+| `researcher` | subagent | `opencode/longcat-2.5-free` | 외부 사실 조사, 출처 기록, SPEC 변경 제안 | `docs/research/**` |
+| `dev-collector` | subagent | `opencode/hy4-flash-free#high` | 수집기, 스케줄러 | `collector/**`, `tests/collector/**` |
+| `dev-data` | subagent | `opencode/deepseek-v4.1-flash-free#high` | DB 스키마·저장소, 전처리, DB 스크립트 | `database/**`, `preprocessing/**`, `scripts/**`, `tests/database/**`, `tests/preprocessing/**` |
+| `dev-ml` | subagent | `opencode/deepseek-v4.1-flash-free#max` | 기준 모델, 학습, 예측, 평가 | `prediction/**`, `notebooks/**`, `tests/prediction/**` |
+| `dev-dashboard` | subagent | `opencode/flint-40b-free#high` | 내부 Streamlit 대시보드 | `dashboard/**`, `tests/dashboard/**` |
+| `dev-publisher` | subagent | `opencode/mimo-v2.6-flash-free` | (Phase 2) 공개 JSON 발행, 시민 공개 웹 | `publisher/**`, `web/**`, `tests/publisher/**` |
+| `reviewer` | subagent | `opencode/deepseek-v4.1-flash-free#max` | 계약 준수·프로젝트 불변식 검토 (읽기 전용) | 없음 |
+
+모델은 `.opencode/agents/<에이전트>.md`의 frontmatter `model`에 정의되어 있다. 이 표는 그 설정의 문서상 기준이며, 모델을 바꾸면 **설정 파일과 이 표를 함께** 갱신한다.
+
+### 모델 선정 이유
+
+**공통 원칙**
+
+- **오케스트레이터만 유료 Claude, 서브에이전트는 전부 무료 `opencode` 모델**이다. 오케스트레이터가 병렬로 4~5개 서브에이전트를 띄우는 구조라, 병렬 비용의 대부분을 차지하는 서브에이전트를 무료 모델로 두어야 전체 비용이 오케스트레이터 한 곳에만 발생한다.
+- `#variant`는 추론 강도다(`low` … `max`). **결과 정확도가 곧 작업 성공 여부를 좌우하는 곳은 `max`/`high`**, 단순·반복 작업은 낮은 강도나 variant 없는 모델을 쓴다.
+- 동시 실행 시 같은 무료 모델에 요청이 몰리면 rate limit에 걸리기 쉬우므로, 병렬 그룹의 모델을 의도적으로 분산했다.
+- 무료 모델은 예고 없이 폐기되거나 제한될 수 있다. 각 에이전트의 **제한 시 대체 모델은 `.opencode/agents/orchestrator.md`의 "모델 제한 시 대체 모델" 절**에 있고, 오케스트레이터가 `subagent` 도구의 `model` 파라미터로 재배정한다. (OpenCode V2에는 에이전트별 자동 fallback 기능이 없다.)
+
+**에이전트별**
+
+- `orchestrator` — `claude-agent/opus#high`: 작업 분해, 계약 해석, 통합 판단, 커밋은 **오판 시 되돌리는 비용이 가장 큰** 의사결정이다. 하위 모델이 계약을 잘못 해석하거나 소유권을 침범하면 전체 슬라이스가 흔들리므로, 최상위 추론 모델을 쓰고 variant는 `high`로 둔다(최대 추론 `max`는 지연이 커서 대화형 조율에 불리).
+- `reviewer` — `opencode/deepseek-v4.1-flash-free#max`: 코드 판독과 불변식 위반 판단은 **출력물 생성이 아니라 추론**이 핵심이다. 대화형 응답이 아니므로 강도를 `max`로 올려 오탐·누락을 줄인다. 코딩 계열 모델이라 코드 문맥 해석이 안정적이다.
+- `researcher` — `opencode/longcat-2.5-free`: 웹 문서와 API 스키마를 길게 읽고 요약해야 해 **긴 컨텍스트**가 유리하고, zero-retention 정책이라 리서치 프롬프트에 외부 자료를 넣어도 보존 위험이 낮다. 무료 한도가 낮아(요청/일 제한) 제한 시 `nvidia/deepseek-ai/deepseek-v4.1-flash#high`로 대체한다.
+- `dev-data` — `opencode/deepseek-v4.1-flash-free#high`: SQL 집계, 70% 관측 규칙, forward fill, as-of 조인처럼 **규칙을 정확히 구현**해야 하고 오류가 조용히 데이터를 오염시킨다. 구현 정확도 우선으로 `high`를 쓴다.
+- `dev-ml` — `opencode/deepseek-v4.1-flash-free#max`: 수식·학습 파이프라인·walk-forward 평가는 **논리 오류의 발견 비용이 가장 큰** 영역이다. dev-data와 같은 계열을 쓰되 강도를 `max`로 올려, 모델 종류를 늘리지 않고 추론 여력을 확보한다.
+- `dev-collector` — `opencode/hy4-flash-free#high`: 외부 API 어댑터·재시도·로깅은 패턴이 반복되는 작업이라 고속 모델로 충분하고, 수집은 주기적으로 자주 실행되므로 응답 속도가 처리량에 직결된다.
+- `dev-dashboard` — `opencode/flint-40b-free#high`: Streamlit 데이터프레임·레이아웃 중심의 UI 작업은 40B급 코드 생성으로 충분하다. DB는 읽기 전용이라 실패해도 데이터를 훼손하지 않아 중간 등급 모델의 위험이 낮다.
+- `dev-publisher` — `opencode/mimo-v2.6-flash-free`: Phase 2의 정적 JSON 발행·웹 페이지는 입력이 이미 확정된 저위험 작업이고, 반복 실행 빈도가 높아 가장 가벼운 모델을 배정했다.
+
+**한계**: 모델 카탈로그는 이 모델들의 벤치마크·컨텍스트 크기를 공개하지 않는다. 위 배치는 계열·제공사·variant 지원 여부에 근거한 **추정**이며, 실제 품질이 기대와 다르면 위 표와 설정 파일을 함께 조정한다. NVIDIA 무료 엔드포인트는 trial 약관이 적용되므로 개인정보·기밀 데이터를 넣지 않는다(불변식 7).
 
 - `SPEC.md`, `PRD.md`, `AGENTS.md`와 계약은 **오케스트레이터만** 수정한다. 다른 에이전트는 변경을 제안한다.
 - 소유자가 없는 새 경로가 필요하면 오케스트레이터가 먼저 소유자를 정하고 이 표와 에이전트 권한을 갱신한다.

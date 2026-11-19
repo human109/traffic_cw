@@ -2,6 +2,7 @@
 description: 기준 모델, XGBoost 학습·예측·평가(prediction/)를 개발한다. 모델 등록, walk-forward 평가, 등급 적중률 산출 담당.
 mode: subagent
 color: "#1abc9c"
+model: opencode/deepseek-v4.1-flash-free#max
 permissions:
   - action: edit
     resource: "*"

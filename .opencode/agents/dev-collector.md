@@ -2,6 +2,7 @@
 description: 수집기(collector/)와 스케줄러를 개발한다. 외부 교통 API 호출, 원본 저장, 수집 로그, 재시도·실패 처리 담당.
 mode: subagent
 color: "#f5a623"
+model: opencode/hy4-flash-free#high
 permissions:
   - action: edit
     resource: "*"

@@ -2,6 +2,7 @@
 description: (Phase 2) 공개 JSON 발행(publisher/)과 시민 공개 정적 웹(web/)을 개발한다.
 mode: subagent
 color: "#e67e22"
+model: opencode/mimo-v2.6-flash-free
 permissions:
   - action: edit
     resource: "*"

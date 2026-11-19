@@ -2,6 +2,7 @@
 description: 변경 사항이 계약, 소유권, 프로젝트 불변식(가짜 데이터 금지, 결측≠0, 미래 정보 금지, KST, 비밀정보)을 지키는지 읽기 전용으로 검토한다.
 mode: subagent
 color: "#e05d5d"
+model: opencode/deepseek-v4.1-flash-free#max
 permissions:
   - action: edit
     resource: "*"
