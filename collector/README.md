@@ -28,6 +28,7 @@
 | `base.py` | `FetchResult`, `SourceAdapter` 프로토콜 — 수집원을 추가할 때 구현할 인터페이스 |
 | `its.py` | ITS 요청 파라미터, tenacity 재시도, XML 파싱, `quality_flag` 판정, 키 가리기 |
 | `store.py` | 원본 파일·관측·로그 저장 (commit하지 않음) |
+| `scheduler.py` | 파이프라인 collect → preprocess → backfill → predict. `python -m collector.scheduler --once`로 1회, 인자 없이 상주(매 5분 30초, KST). 예정 시각보다 `scheduler_misfire_grace_s`(60초) 넘게 늦으면 그 회차는 건너뛴다 |
 
 ## 주의
 
