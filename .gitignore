@@ -17,3 +17,6 @@ saved_models/
 
 # superpowers scratch
 .superpowers/
+
+# editor / vault config (local only)
+.obsidian/

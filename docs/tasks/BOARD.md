@@ -39,6 +39,9 @@
 | ID | 작업 | 소유 | 선행 | 상태 |
 |---|---|---|---|---|
 | T-OPS-01 | 에이전트별 모델 지정과 제한 시 대체 모델 규칙 문서화 | orchestrator | - | done |
+| T-OPS-02 | GitHub 공개 준비 점검: `.gitignore` 보강(`.obsidian/`), MIT LICENSE 추가 | orchestrator | - | done |
+| D-COL-05 | 저장 범위 밖 관측 행 정리(`collector/maintenance.py` purge, dry-run 기본) | dev-collector | - | review |
+| D-DAT-02b | 전처리 규칙 완성: `preprocessing/rules.py`만 작성됨(테스트·`aggregate` 배선 미완) | dev-data | D-DAT-02a | in_progress |
 | D-DSH-U01 | 구간별 현재 속도 표의 '상태'(원활/서행/정체) 글씨 색 구분 | dev-dashboard | - | done (reviewer 승인, 24 passed) |
 
 ### Slice 1 후보 (리뷰에서 나온 후속 과제)
