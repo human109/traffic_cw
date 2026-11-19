@@ -40,7 +40,7 @@
 |---|---|---|---|---|
 | T-OPS-01 | 에이전트별 모델 지정과 제한 시 대체 모델 규칙 문서화 | orchestrator | - | done |
 | T-OPS-02 | GitHub 공개 준비 점검: `.gitignore` 보강(`.obsidian/`), MIT LICENSE 추가 | orchestrator | - | done |
-| D-COL-05 | 저장 범위 밖 관측 행 정리(`collector/maintenance.py` purge, dry-run 기본) | dev-collector | - | review |
+| D-COL-05 | 저장 범위 밖 관측 행 정리(`collector/maintenance.py` purge, dry-run 기본) | dev-collector | - | done (reviewer 승인, tests/collector+contracts 59 passed) |
 | D-DAT-02b | 전처리 규칙 완성: `preprocessing/rules.py`만 작성됨(테스트·`aggregate` 배선 미완) | dev-data | D-DAT-02a | in_progress |
 | D-DSH-U01 | 구간별 현재 속도 표의 '상태'(원활/서행/정체) 글씨 색 구분 | dev-dashboard | - | done (reviewer 승인, 24 passed) |
 
@@ -53,6 +53,9 @@
 | Task 8 리뷰 | degraded 예측 회색 표시, 구간별 지연 판단, 수집 시각 별도 표시 |
 | D-DSH-U01 리뷰 | 다크 테마에서 상태 색 대비를 WCAG AA(4.5:1)까지 올리기(현재 3:1 기준) |
 | D-DSH-U01 리뷰 | `data.grade` 라벨 집합과 `STATUS_TEXT_COLORS` 키의 일치를 테스트로 고정 |
+| D-COL-05 리뷰 | `main()` CLI 테스트 추가: `--apply` 없으면 dry-run·무삭제, `--apply`면 삭제+VACUUM (요구사항 2 실행 검증) |
+| D-COL-05 리뷰 | purge 안전 문구 정리: "백업은 자동이 아니다" 명시, `--apply` 시 해석된 DB 경로 출력, 어떤 raw를 넘겨야 하는지 README에 기재 |
+| D-COL-05 리뷰 | `finally`의 `DROP TABLE`을 예외 안전하게, 삭제 행 수 불일치 분기 테스트 추가 |
 | Task 6 | 70% 부분 관측 기준, forward fill(2 bin), 측도 `speed_side` |
 | 실측 | `partial` 원인: 부모 링크가 체인에 없는 4140068801(S3 본선)·4150149001(S6 측도) — ITS 응답에서 대응 링크 확인 |
 | 방향 검증 | 4140071400(S3)의 ITS 끝 교차로(41400574)가 2026 노드링크(41402077)와 다름 — 링크 경계 변경으로 추정, ITS 쪽 후속 링크 확인해 매핑 보정 |
