@@ -83,6 +83,8 @@
 | 2026-11-18 | R-03b | 8구간 후보를 6구간(S1~S6)+참고 S0로 재편 | SPEC v1.3 |
 | 2026-11-18 | Task 5 리뷰 | `segment_link.source`는 링크 ID 체계 출처, 수집원별로 거르지 않음 | C-01 v1.1, Ruling |
 | 2026-11-19 | 첫 ITS 실측 | ITS가 창원대로를 제공함(창원 bbox 6,792 링크 중 창원대로 37개). ITS는 분할 전 링크(끝 00) 단위로 값을 주며 `속도×통행시간` 역산 길이가 분할 링크 길이 합과 일치 → 분할 링크를 부모에 합쳐 링크 39개로 재구성(`config/build_segment_links.py`). 첫 실측 DB는 `data/traffic_firstfetch_20261119.db`로 보관 | Ruling |
+| 2026-11-19 | 모델 운영 | 기본 무료 모델 사용 한도 초과 → 대체 모델 `nvidia/deepseek-ai/deepseek-v4.1-flash`가 2026-11-16 폐기(모델 목록에는 active로 표시됨). 사람 승인으로 reviewer·researcher·dev-data·dev-ml 대체 모델을 `nvidia/z-ai/glm-5.3-flash#thinking`으로 교체. dev-dashboard는 `nvidia/meta/muse-glimmer-30b#high`로 진행 | 사람 결정 |
+| 2026-11-19 | 운영 DB 정리 | 저장 범위 밖 46,725행 삭제·VACUUM(12.7MB→1.9MB), 6,435행·117링크 유지. 백업 `data/backup/traffic_before_purge_20261119.db` | 사람 승인 |
 | 2026-11-19 | 최종 리뷰 I3 | **수집 성공률 정의**: 평일 06:00~10:00의 5분 bin(48개) × 예측 대상 구간 6개 중 `segment_traffic_5min.speed IS NOT NULL`(imputed 제외)인 비율. 회차 상태(`partial`·`no_update`)가 아니라 실제로 쓸 수 있는 데이터 기준이다. 대상 링크 2개가 ITS에 없어 상태가 늘 `partial`이고, ITS 갱신 전 회차는 `no_update`가 정상이기 때문. Slice 0 완료 = 평일 3일 연속 95% 이상 | Ruling |
 | 2026-11-19 | 최종 리뷰 I2 | pytest 로그를 임시 폴더로 격리(`tests/conftest.py`). 이전 테스트가 남긴 합성 로그 줄은 `logs/app.log` 978행까지 — 그 이전 로그로 성공률을 세지 않는다 | 수정 |
 | 2026-11-19 | 방향 검증 | 노드 연결(본선 77개 끊김 0), 좌표 진행(86개 모두 소계광장→성주광장 축 방위 124° 방향, 역행 0), ITS 시작·끝 교차로 대조(36/37 일치, 역방향 0), 반대 방향 짝 링크 37/37 존재 → 방향 정상. ITS는 교차로 중심 노드(끝 00), 2026 노드링크는 방향별 노드(끝 02·03)라 노드 앞 8자리로 비교. 스크립트 `docs/research/scripts/verify_direction.py`, 결과 `docs/research/samples/direction_check_2026-11-19.txt` | 확인 |
