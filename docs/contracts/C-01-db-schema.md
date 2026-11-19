@@ -15,7 +15,7 @@ DDL 원문은 `docs/contracts/C-01-schema.sql`이다. `database/schema.sql`은 �
 
 - 모든 시각 컬럼은 `YYYY-MM-DDTHH:MM:SS+09:00` 문자열이다(`common.timeutil.to_iso`).
 - 결측은 NULL로 저장한다. 수집 실패나 미관측을 0으로 쓰지 않는다.
-- `segment_link.source`는 **링크 ID 체계의 출처**다(예: `moct_nodelink` = 국토부 표준노드링크, 테스트는 `synthetic`). 관측 수집원(`traffic_observation.source`, 예: `its`)과는 다르다. ITS와 경찰청 UTIC 모두 표준노드링크 ID를 쓰므로(R-01, R-02), 수집기와 전처리는 `link_id`로만 대조하고 `segment_link.source`로 거르지 않는다.
+- `segment_link.source`는 **링크 ID 체계의 출처**다(예: `moct_nodelink` = 국토부 표준노드링크, 테스트는 `synthetic`). 관측 수집원(`traffic_observation.source`, 예: `its`)과는 다르다. ITS와 경찰청 UTIC 모두 표준노드링크 ID를 쓰므로(R-01, R-02), 수집기와 전처리는 `link_id`로만 대조하고 `segment_link.source`로 거르지 않는다. 단 ITS는 개정 이전 버전 ID를 줄 수 있으므로(R-06b: 2026-11-11 배포본에 없는 ID 4개), `segment_link.link_id`는 **수집 API가 실제로 주는 ID**로 두고 길이는 배포본 값을 쓴다(`config/build_segment_links.py`의 `ITS_ID_OVERRIDES`). 링크 ID를 바꿀 때는 기존 행의 `valid_to`를 닫고 새 행을 추가한다.
 - `traffic_observation.quality_flag`: `ok` / `default_value`(API가 준 0 등 결측을 나타내는 값) / `out_of_range` / `frozen`(Slice 1)
 - `segment_traffic_5min.quality_flag`:
   - `ok`: 본선 링크가 모두 관측되었고 길이가 모두 있어 거리 가중 조화평균으로 계산함

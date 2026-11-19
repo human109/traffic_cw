@@ -32,6 +32,11 @@ def _new_segment(old: str, seq: int) -> str:
     }.get(old) or ("S3" if seq <= 17 else "S4")
 
 
+# ITS가 2026 배포본과 다른(개정 이전) ID로 주는 링크: 배포본 ID → ITS ID (길이는 배포본 값 유지)
+# 근거: docs/research/R-06b-link-fix-and-direction.md 수정안 1
+ITS_ID_OVERRIDES: dict[str, str] = {"4140068801": "4140068800"}
+
+
 def parent_id(link_id: str) -> str:
     return link_id[:8] + "00"
 
@@ -58,7 +63,7 @@ def build() -> list[dict]:
     out, seq = [], {}
     for (seg, _), r in merged.items():
         seq[seg] = seq.get(seg, 0) + 1
-        out.append(r | {"seq": seq[seg]})
+        out.append(r | {"seq": seq[seg], "link_id": ITS_ID_OVERRIDES.get(r["link_id"], r["link_id"])})
     return out
 
 
