@@ -20,3 +20,6 @@ saved_models/
 
 # editor / vault config (local only)
 .obsidian/
+
+# uv lock (의존성 기준은 requirements.txt)
+uv.lock
