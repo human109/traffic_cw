@@ -11,6 +11,8 @@ SQLite 연결과 스키마를 제공하는 공용 모듈이다. 다른 모듈은
 | `init_db(conn)`: schema.sql 실행. 모두 `IF NOT EXISTS`라 재실행 안전 | `database/db.py` |
 | 구간·링크 시드 UPSERT, `distance_m` 계산 | `scripts/load_segments.py` |
 | 운영 DB 생성 + 시드 적재 (`python -m scripts.init_db`) | `scripts/init_db.py` |
+| 날짜별 수집 성공률 조회: `python -m scripts.collection_rate [--days 7]` (readonly) | `scripts/collection_rate.py` |
+| 운영 DB 온라인 백업·보관 정리: `python -m scripts.backup_db` | `scripts/backup_db.py` |
 
 ## 알아 둘 점
 
