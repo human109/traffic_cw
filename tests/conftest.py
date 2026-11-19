@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
+
+# 테스트 로그가 운영 로그(logs/app.log)에 섞이지 않게, 어떤 모듈도 로거를 만들기 전에 위치를 바꾼다.
+os.environ["LOG_DIR"] = tempfile.mkdtemp(prefix="traffic-test-logs-")
+
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path

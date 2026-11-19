@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 상태 | frozen |
-| 버전 | v1 |
+| 버전 | v1.1 |
 | 영향 받는 에이전트 | 전체 |
 | 계약 테스트 | `tests/contracts/test_c01_schema.py` |
 
