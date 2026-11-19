@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 # `streamlit run dashboard/app.py`는 스크립트 폴더(dashboard/)를 sys.path에 넣으므로 저장소 루트를 추가한다.
@@ -15,15 +16,21 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import streamlit as st  # noqa: E402
+import pandas as pd  # noqa: E402
 
 from common.timeutil import now_kst, to_iso  # noqa: E402
 from config.settings import get_settings  # noqa: E402
 from dashboard.data import (  # noqa: E402
     DASH,
+    active_models,
     collection_status,
     current_table,
     delay_minutes,
+    evaluation_table,
+    heatmap,
     latest_available_at,
+    segment_delays,
+    timeseries,
 )
 from dashboard.style import status_text_color  # noqa: E402
 
@@ -32,6 +39,7 @@ from dashboard.style import status_text_color  # noqa: E402
 def render() -> None:
     """화면 전체를 그린다. 60초마다 다시 실행된다."""
     from database.db import connect  # Task 4 산출물. 화면 렌더 시점에만 필요하다.
+    import plotly.graph_objects as go
 
     s = get_settings()
     now = now_kst()
@@ -43,29 +51,96 @@ def render() -> None:
     try:
         latest = latest_available_at(conn, now)
         delay = delay_minutes(latest, now)
+        # 최근 수집 시각
+        col_row = conn.execute("SELECT started_at FROM collection_log ORDER BY started_at DESC LIMIT 1").fetchone()
+        latest_collect = col_row[0] if col_row else None
 
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         c1.metric("조회 시각", to_iso(now))
         c2.metric("최신 데이터 시각", to_iso(latest) if latest else DASH)
+        c3.metric("최근 수집 시작", latest_collect if latest_collect else DASH)
         if delay is None:
             st.warning("집계 데이터 없음")
         elif delay >= s.stale_minutes:
             st.warning(f"데이터 {int(delay)}분 지연")
 
-        st.subheader("구간별 현재 속도·예측 (km/h)")
-        st.caption("상태는 속도 기준 파생값(SPEC 9.2). 예측은 기준 모델(baseline_persistence).")
-        # 상태 열에만 등급별 글씨색을 입힌다. 데이터 함수(current_table)는 순수하게 값을 유지한다.
-        st.dataframe(
-            current_table(conn, now, s).style.map(status_text_color, subset=["상태"]),
-            hide_index=True,
-        )
+        tab_current, tab_timeseries, tab_performance = st.tabs(["현재", "시계열", "성능"])
 
-        st.subheader("최근 수집 결과")
-        log = collection_status(conn)
-        if log.empty:
-            st.write(DASH)
-        else:
-            st.dataframe(log, hide_index=True)
+        with tab_current:
+            st.subheader("구간별 현재 속도·예측 (km/h)")
+            st.caption("상태는 속도 기준 파생값(SPEC 9.2). 예측은 기준 모델(baseline_persistence).")
+            df_cur = current_table(conn, now, s)
+            # 품질 열이 보정/부분이면 전체 행을 회색으로 표시
+            def _row_style(row):
+                degraded = row.get("품질") in ("보정", "부분")
+                styles = {}
+                for col in row.index:
+                    if col == "상태":
+                        if degraded:
+                            styles[col] = "color: #6e6e6e;"
+                        else:
+                            styles[col] = status_text_color(str(row[col]))
+                    else:
+                        if degraded:
+                            styles[col] = "color: #6e6e6e;"
+                        else:
+                            styles[col] = ""
+                return pd.Series(styles)
+            styled = df_cur.style.apply(_row_style, axis=1)
+            st.dataframe(styled, hide_index=True)
+
+            st.subheader("최근 수집 결과")
+            log = collection_status(conn)
+            if log.empty:
+                st.write(DASH)
+            else:
+                st.dataframe(log, hide_index=True)
+
+        with tab_timeseries:
+            st.subheader("시계열 그래프")
+            # 구간 선택
+            segs = conn.execute("SELECT segment_id FROM road_segment WHERE is_target = 1 ORDER BY seq").fetchall()
+            seg_options = [r[0] for r in segs]
+            seg = st.selectbox("구간", seg_options, index=0)
+            horizon = st.selectbox("horizon(분)", list(s.horizons), index=2)
+            # 모델 선택 (활성 모델 조회)
+            models = active_models(conn)
+            if not models:
+                st.info("활성 모델이 없습니다.")
+                models = ["baseline_persistence"]
+            model_v = st.selectbox("모델", models, index=0)
+            # 시간 범위 (간단하게 24시간 전~지금)
+            start = now - timedelta(days=1)
+            end = now
+            df_ts = timeseries(conn, seg, start, end, int(horizon), model_v, now)
+            if df_ts.empty or df_ts.dropna(subset=["실제", "예측"]).empty:
+                st.info("선택한 조건에 데이터가 없습니다.")
+            else:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df_ts["시각"], y=df_ts["실제"], name="실제", mode="lines+markers"))
+                fig.add_trace(go.Scatter(x=df_ts["시각"], y=df_ts["예측"], name="예측", mode="lines+markers"))
+                fig.update_layout(xaxis_title="시각", yaxis_title="속도(km/h)", legend=dict(orientation="h"))
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.subheader("속도 히트맵")
+            start_h = now - timedelta(days=1)
+            end_h = now
+            df_hm = heatmap(conn, start_h, end_h, now)
+            if df_hm.empty:
+                st.info("히트맵 데이터가 없습니다.")
+            else:
+                # Plotly Heatmap
+                fig_h = go.Figure(data=go.Heatmap(z=df_hm.values, x=df_hm.columns, y=df_hm.index, colorscale="Viridis", hoverongaps=False))
+                fig_h.update_layout(xaxis_title="구간", yaxis_title="시각")
+                st.plotly_chart(fig_h, use_container_width=True)
+
+        with tab_performance:
+            st.subheader("모델 성능 요약")
+            df_perf = evaluation_table(conn, days=7)
+            if df_perf.empty:
+                st.info("평가 데이터가 없습니다.")
+            else:
+                st.dataframe(df_perf, hide_index=True)
     except sqlite3.Error as e:
         st.error(f"조회 실패: {e}")
     finally:

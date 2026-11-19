@@ -14,13 +14,17 @@ from dashboard.data import (
     collection_status,
     current_table,
     delay_minutes,
+    evaluation_table,
     fmt,
     grade,
+    heatmap,
     latest_available_at,
+    segment_delays,
+    timeseries,
 )
 
 S = Settings()
-SPEED_COLS = ["현재 속도", "상태", "5분 후", "10분 후", "15분 후", "30분 후"]
+SPEED_COLS = ["현재 속도", "상태", "품질", "5분 후", "10분 후", "15분 후", "30분 후"]
 BIN = datetime(2026, 11, 16, 7, 0, tzinfo=KST)
 NOW = datetime(2026, 11, 16, 7, 6, tzinfo=KST)
 
@@ -173,3 +177,223 @@ def test_no_writes(fixture_conn: sqlite3.Connection) -> None:
     current_table(fixture_conn, NOW, S)
     collection_status(fixture_conn)
     assert fixture_conn.total_changes == before
+
+
+def test_current_quality_mapping(fixture_conn: sqlite3.Connection) -> None:
+    _insert_bin(fixture_conn, "S1", BIN, 40.0, BIN + timedelta(minutes=1), flag="ok")
+    _insert_bin(fixture_conn, "S2", BIN, 30.0, BIN + timedelta(minutes=1), flag="imputed")
+    _insert_bin(fixture_conn, "S3", BIN, 20.0, BIN + timedelta(minutes=1), flag="partial")
+    fixture_conn.commit()
+    df = current_table(fixture_conn, NOW, S).set_index("구간")
+    assert df.loc["S1", "품질"] == "ok"
+    assert df.loc["S2", "품질"] == "보정"
+    assert df.loc["S3", "품질"] == "부분"
+
+
+def test_timeseries_nan(fixture_conn: sqlite3.Connection) -> None:
+    # 예측만 있고 실제 없음 → 실제 NaN
+    base = BIN
+    conn = fixture_conn
+    # Ensure model exists
+    conn.execute(
+        "INSERT OR IGNORE INTO model_registry (model_version, model_type, target_var, horizon, trained_at, is_active)"
+        " VALUES (?, 'persistence', 'speed', 0, ?, 1)",
+        ("baseline_persistence", to_iso(BIN))
+    )
+    conn.execute(
+        "INSERT INTO traffic_prediction (segment_id, base_time, executed_at, horizon, target_time, target_var, predicted_value, model_version, input_quality)"
+        " VALUES (?, ?, ?, ?, ?, 'speed', ?, ?, ?)",
+        ("S1", to_iso(base), to_iso(NOW), 5, to_iso(base + timedelta(minutes=5)), 42.0, "baseline_persistence", "ok")
+    )
+    conn.commit()
+    df = timeseries(conn, "S1", BIN, BIN + timedelta(minutes=10), 5, "baseline_persistence", NOW)
+    assert not df.empty
+    assert df.iloc[0]["예측"] == 42.0
+    import math
+    assert math.isnan(df.iloc[0]["실제"])
+
+
+def test_heatmap_column_order(fixture_conn: sqlite3.Connection) -> None:
+    _insert_bin(fixture_conn, "S2", BIN, 30.0, BIN + timedelta(minutes=1))
+    _insert_bin(fixture_conn, "S1", BIN, 40.0, BIN + timedelta(minutes=1))
+    fixture_conn.commit()
+    df = heatmap(fixture_conn, BIN - timedelta(minutes=1), BIN + timedelta(minutes=10), NOW)
+    # columns must follow road_segment seq
+    assert list(df.columns)[:2] == ["S1", "S2"]
+
+
+def test_evaluation_improvement(fixture_conn: sqlite3.Connection) -> None:
+    now_ts = to_iso(NOW)
+    conn = fixture_conn
+    # Ensure models exist
+    conn.execute(
+        "INSERT OR IGNORE INTO model_registry (model_version, model_type, target_var, horizon, trained_at, is_active)"
+        " VALUES (?, 'persistence', 'speed', 0, ?, 1)",
+        ("baseline_persistence", to_iso(BIN))
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO model_registry (model_version, model_type, target_var, horizon, trained_at, is_active)"
+        " VALUES (?, 'recent', 'speed', 0, ?, 1)",
+        ("baseline_recent15", to_iso(BIN))
+    )
+    # persistence row
+    conn.execute(
+        "INSERT INTO model_evaluation (model_version, eval_type, period_start, period_end, segment_id, regime, n_samples, mae, rmse, wape, grade_accuracy, evaluated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("baseline_persistence", "live", to_iso(BIN), to_iso(BIN + timedelta(days=1)), None, "h5:all", 10, 5.0, 0, 0, 0, now_ts)
+    )
+    # other model
+    conn.execute(
+        "INSERT INTO model_evaluation (model_version, eval_type, period_start, period_end, segment_id, regime, n_samples, mae, rmse, wape, grade_accuracy, evaluated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("baseline_recent15", "live", to_iso(BIN), to_iso(BIN + timedelta(days=1)), None, "h5:all", 10, 4.0, 0, 0, 0, now_ts)
+    )
+    conn.commit()
+    df = evaluation_table(conn, days=1)
+    # 개선율 = 1 - 4/5 = 0.2
+    row = df[df["model_version"] == "baseline_recent15"].iloc[0]
+    assert abs(row["개선율"] - 0.2) < 1e-6
+
+
+def test_timeseries_asof_executed_after_now(fixture_conn: sqlite3.Connection) -> None:
+    base = BIN
+    conn = fixture_conn
+    conn.execute(
+        "INSERT OR IGNORE INTO model_registry (model_version, model_type, target_var, horizon, trained_at, is_active)"
+        " VALUES (?, 'persistence', 'speed', 0, ?, 1)",
+        ("baseline_persistence", to_iso(BIN))
+    )
+    # executed_at > now → 예측은 NaN
+    conn.execute(
+        "INSERT INTO traffic_prediction (segment_id, base_time, executed_at, horizon, target_time, target_var, predicted_value, model_version, input_quality)"
+        " VALUES (?, ?, ?, ?, ?, 'speed', ?, ?, ?)",
+        ("S1", to_iso(base), to_iso(NOW + timedelta(minutes=1)), 5, to_iso(base + timedelta(minutes=5)), 42.0, "baseline_persistence", "ok")
+    )
+    conn.commit()
+    df = timeseries(conn, "S1", BIN, BIN + timedelta(minutes=10), 5, "baseline_persistence", NOW)
+    assert df.empty or df["예측"].isna().all()
+
+
+def test_timeseries_asof_available_after_now(fixture_conn: sqlite3.Connection) -> None:
+    base = BIN
+    conn = fixture_conn
+    conn.execute(
+        "INSERT OR IGNORE INTO model_registry (model_version, model_type, target_var, horizon, trained_at, is_active)"
+        " VALUES (?, 'persistence', 'speed', 0, ?, 1)",
+        ("baseline_persistence", to_iso(BIN))
+    )
+    conn.execute(
+        "INSERT INTO traffic_prediction (segment_id, base_time, executed_at, horizon, target_time, target_var, predicted_value, model_version, input_quality)"
+        " VALUES (?, ?, ?, ?, ?, 'speed', ?, ?, ?)",
+        ("S1", to_iso(base), to_iso(NOW), 5, to_iso(base + timedelta(minutes=5)), 42.0, "baseline_persistence", "ok")
+    )
+    # 실제값 but available_at > now → 실제 NaN
+    conn.execute(
+        "INSERT INTO segment_traffic_5min (segment_id, bin_time, available_at, speed, n_links_expected, n_links_observed, quality_flag, processed_at)"
+        " VALUES (?, ?, ?, ?, 2, 2, ?, ?)",
+        ("S1", to_iso(base + timedelta(minutes=5)), to_iso(NOW + timedelta(minutes=1)), 100.0, "ok", to_iso(NOW + timedelta(minutes=1)))
+    )
+    conn.commit()
+    df = timeseries(conn, "S1", BIN, BIN + timedelta(minutes=10), 5, "baseline_persistence", NOW)
+    assert not df.empty
+    import math
+    assert math.isnan(df.iloc[0]["실제"])
+
+
+def test_timeseries_real_excludes_imputed_missing(fixture_conn: sqlite3.Connection) -> None:
+    base = BIN
+    conn = fixture_conn
+    conn.execute(
+        "INSERT OR IGNORE INTO model_registry (model_version, model_type, target_var, horizon, trained_at, is_active)"
+        " VALUES (?, 'persistence', 'speed', 0, ?, 1)",
+        ("baseline_persistence", to_iso(BIN))
+    )
+    conn.execute(
+        "INSERT INTO traffic_prediction (segment_id, base_time, executed_at, horizon, target_time, target_var, predicted_value, model_version, input_quality)"
+        " VALUES (?, ?, ?, ?, ?, 'speed', ?, ?, ?)",
+        ("S1", to_iso(base), to_iso(NOW), 5, to_iso(base + timedelta(minutes=5)), 42.0, "baseline_persistence", "ok")
+    )
+    # imputed bin
+    conn.execute(
+        "INSERT INTO segment_traffic_5min (segment_id, bin_time, available_at, speed, n_links_expected, n_links_observed, quality_flag, processed_at)"
+        " VALUES (?, ?, ?, ?, 2, 2, ?, ?)",
+        ("S1", to_iso(base + timedelta(minutes=5)), to_iso(NOW), 100.0, "imputed", to_iso(NOW))
+    )
+    conn.commit()
+    df = timeseries(conn, "S1", BIN, BIN + timedelta(minutes=10), 5, "baseline_persistence", NOW)
+    assert not df.empty
+    import math
+    assert math.isnan(df.iloc[0]["실제"])
+
+
+def test_empty_db_functions(fixture_conn: sqlite3.Connection) -> None:
+    # empty db: timeseries empty df
+    df_ts = timeseries(fixture_conn, "S1", BIN, BIN + timedelta(hours=1), 5, "baseline_persistence", NOW)
+    assert list(df_ts.columns) == ["시각", "실제", "예측"]
+    # heatmap empty but columns exist
+    df_hm = heatmap(fixture_conn, BIN, BIN + timedelta(hours=1), NOW)
+    # columns may be empty if no segments? assume segments exist
+    # evaluation_table empty
+    df_ev = evaluation_table(fixture_conn, days=7)
+    assert df_ev.empty
+    # segment_delays returns dict with None
+    delays = segment_delays(fixture_conn, NOW)
+    assert isinstance(delays, dict)
+    for v in delays.values():
+        assert v is None
+
+
+def test_segment_delays_value(fixture_conn: sqlite3.Connection) -> None:
+    _insert_bin(fixture_conn, "S1", BIN, 40.0, NOW - timedelta(minutes=5))
+    _insert_bin(fixture_conn, "S2", BIN, 30.0, NOW - timedelta(minutes=10))
+    fixture_conn.commit()
+    delays = segment_delays(fixture_conn, NOW)
+    assert abs(delays["S1"] - 5.0) < 1e-6
+    assert abs(delays["S2"] - 10.0) < 1e-6
+    # missing bin excluded
+    _insert_bin(fixture_conn, "S3", BIN, None, NOW - timedelta(minutes=1), flag="missing")
+    fixture_conn.commit()
+    delays2 = segment_delays(fixture_conn, NOW)
+    assert delays2["S3"] is None
+
+
+def test_evaluation_improvement_nan_without_persistence(fixture_conn: sqlite3.Connection) -> None:
+    now_ts = to_iso(NOW)
+    conn = fixture_conn
+    conn.execute(
+        "INSERT OR IGNORE INTO model_registry (model_version, model_type, target_var, horizon, trained_at, is_active)"
+        " VALUES (?, 'recent', 'speed', 0, ?, 1)",
+        ("baseline_recent15", to_iso(BIN))
+    )
+    conn.execute(
+        "INSERT INTO model_evaluation (model_version, eval_type, period_start, period_end, segment_id, regime, n_samples, mae, rmse, wape, grade_accuracy, evaluated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("baseline_recent15", "live", to_iso(BIN), to_iso(BIN + timedelta(days=1)), None, "h5:all", 10, 4.0, 0, 0, 0, now_ts)
+    )
+    conn.commit()
+    df = evaluation_table(conn, days=1)
+    row = df[df["model_version"] == "baseline_recent15"].iloc[0]
+    import math
+    assert math.isnan(row["개선율"])
+
+
+def test_naive_datetime_raises(fixture_conn: sqlite3.Connection) -> None:
+    import datetime
+    naive = datetime.datetime(2026, 11, 16, 7, 6)
+    with pytest.raises(ValueError):
+        timeseries(fixture_conn, "S1", naive, NOW, 5, "baseline_persistence", NOW)
+    with pytest.raises(ValueError):
+        heatmap(fixture_conn, naive, NOW, NOW)
+
+
+def test_no_writes_extended(fixture_conn: sqlite3.Connection) -> None:
+    before = fixture_conn.total_changes
+    current_table(fixture_conn, NOW, S)
+    collection_status(fixture_conn)
+    timeseries(fixture_conn, "S1", BIN, BIN + timedelta(hours=1), 5, "baseline_persistence", NOW)
+    heatmap(fixture_conn, BIN, BIN + timedelta(hours=1), NOW)
+    evaluation_table(fixture_conn, days=7)
+    segment_delays(fixture_conn, NOW)
+    assert fixture_conn.total_changes == before
+
+

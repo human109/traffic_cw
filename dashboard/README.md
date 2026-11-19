@@ -14,12 +14,13 @@ DB 경로는 `config.settings.get_settings().db_path`(기본 `data/traffic.db`, 
 
 ## 화면 구성
 
-1. **상단**: 조회 시각, 최신 데이터 시각(속도가 있는 `segment_traffic_5min` bin의 `available_at` 최대값. `missing` bin은 제외).
+1. **상단**: 조회 시각, 최신 데이터 시각(속도가 있는 `segment_traffic_5min` bin의 `available_at` 최대값. `missing` bin은 제외), 최근 수집 시작 시각.
    최신 데이터가 `stale_minutes`(10분) 이상 늦으면 `데이터 N분 지연` 경고, 집계가 없으면 `집계 데이터 없음` 경고.
-2. **구간별 표**: 대상 구간(`is_target=1`)을 seq 순으로 보여준다.
-   열: 구간, 이름, 현재 속도, 상태(원활/서행/정체, 속도 기준 파생값), 5·10·15·30분 후 예측.
-   예측은 최신 bin의 `bin_time`을 `base_time`으로 하는 `baseline_persistence` 예측 중 `executed_at ≤ 조회 시각`인 것이다.
-3. **최근 수집 결과**: `collection_log` 최근 10건.
+2. **탭 `현재`**: 구간별 표.
+   열: 구간, 이름, 현재 속도, 상태(원활/서행/정체, 속도 기준 파생값), 품질(`ok`/`보정`/`부분`/`-`), 5·10·15·30분 후 예측.
+   품질이 `보정`/`부분`인 행은 회색으로 표시(degraded/imputed). 예측은 최신 bin의 `bin_time`을 `base_time`으로 하는 `baseline_persistence` 예측 중 `executed_at ≤ 조회 시각`인 것이다.
+3. **탭 `시계열`**: 구간·horizon·모델 선택 시계열 그래프(실제 vs 예측, Plotly). 실제값은 보정·missing bin 제외(보정값 사용 안 함). 하단에 속도 히트맵(시간×구간) — 히트맵은 보정값 포함, `available_at ≤ 조회 시각`만 반영.
+4. **탭 `성능`**: `model_evaluation` 최신 행과 기준 모델 대비 개선율.
 
 화면은 60초마다 자동 갱신한다(`st.fragment(run_every=60)`).
 
@@ -28,6 +29,7 @@ DB 경로는 `config.settings.get_settings().db_path`(기본 `data/traffic.db`, 
 - 값이 없거나 예측이 `skipped`이면 `-`. 임의 수치·예시 값을 넣지 않는다.
 - 혼잡 등급 경계는 `config/settings.py`의 `grade_free_min_kmh`, `grade_slow_min_kmh`(공개 화면과 같은 값).
 - 숫자는 정수로 반올림해 표시한다.
+- 품질이 `보정`(imputed) 또는 `부분`(partial/unweighted)인 구간은 회색 표시.
 
 ## 코드 구조
 

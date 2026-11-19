@@ -8,12 +8,13 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 import pandas as pd
 
-from common.timeutil import parse_iso, to_iso
+from common.grades import GRADE_LABEL, grade as _grade
+from common.timeutil import parse_iso, require_aware, to_iso
 from config.settings import Settings
 
 # dev-ml의 기준 모델 버전 문자열과 같은 값. prediction 내부 코드는 import하지 않는다(AGENTS.md 1장 4).
@@ -22,20 +23,10 @@ BASELINE_MODEL_VERSION = "baseline_persistence"
 DASH = "-"
 
 
-def _require_aware(dt: datetime) -> None:
-    if dt.tzinfo is None or dt.utcoffset() is None:
-        raise ValueError(f"timezone 정보가 없는 datetime은 허용하지 않는다: {dt!r}")
-
-
 def grade(speed: float | None, s: Settings) -> str | None:
     """속도 기준 파생 혼잡 등급(SPEC 9.2). 경계는 config 공용 값을 쓴다."""
-    if speed is None:
-        return None
-    if speed >= s.grade_free_min_kmh:
-        return "원활"
-    if speed >= s.grade_slow_min_kmh:
-        return "서행"
-    return "정체"
+    g = _grade(speed, s)
+    return GRADE_LABEL.get(g) if g is not None else None
 
 
 def fmt(value: float | None) -> str:
@@ -47,10 +38,10 @@ def fmt(value: float | None) -> str:
 
 def delay_minutes(latest_available_at: datetime | None, now: datetime) -> float | None:
     """최신 데이터가 쓸 수 있게 된 시각부터 `now`까지의 지연(분). 데이터가 없으면 None."""
-    _require_aware(now)
+    require_aware(now)
     if latest_available_at is None:
         return None
-    _require_aware(latest_available_at)
+    require_aware(latest_available_at)
     return (now - latest_available_at).total_seconds() / 60
 
 
@@ -73,6 +64,7 @@ def current_table(conn: sqlite3.Connection, now: datetime, s: Settings) -> pd.Da
     그 bin_time을 base_time으로 하고 `executed_at ≤ now`인 `baseline_persistence` 예측을 쓴다(시점 기준).
     `skipped` 예측과 값이 없는 칸은 '-'. `now`에 tz 정보가 없으면 ValueError.
     """
+    require_aware(now)
     now_iso = to_iso(now)
     segments = conn.execute(
         "SELECT segment_id, start_node, end_node FROM road_segment WHERE is_target = 1 ORDER BY seq"
@@ -83,13 +75,28 @@ def current_table(conn: sqlite3.Connection, now: datetime, s: Settings) -> pd.Da
         sid = seg[0]
         row: dict[str, str] = {"구간": sid, "이름": f"{seg[1]} → {seg[2]}"}
         latest = conn.execute(
-            "SELECT bin_time, speed FROM segment_traffic_5min"
+            "SELECT bin_time, speed, quality_flag FROM segment_traffic_5min"
             " WHERE segment_id = ? AND available_at <= ? ORDER BY bin_time DESC LIMIT 1",
             (sid, now_iso),
         ).fetchone()
         speed = latest[1] if latest else None
+        flag = latest[2] if latest else None
         row["현재 속도"] = fmt(speed)
         row["상태"] = grade(speed, s) or DASH
+        # 품질 열 매핑
+        if flag is None:
+            quality_disp = DASH
+        elif flag == "ok":
+            quality_disp = "ok"
+        elif flag == "imputed":
+            quality_disp = "보정"
+        elif flag in ("partial", "unweighted"):
+            quality_disp = "부분"
+        elif flag == "missing":
+            quality_disp = DASH
+        else:
+            quality_disp = DASH
+        row["품질"] = quality_disp
 
         preds: dict[int, float | None] = {}
         if latest:
@@ -104,8 +111,154 @@ def current_table(conn: sqlite3.Connection, now: datetime, s: Settings) -> pd.Da
             row[f"{h}분 후"] = fmt(preds.get(h))
         rows.append(row)
 
-    columns = ["구간", "이름", "현재 속도", "상태", *[f"{h}분 후" for h in s.horizons]]
+    columns = ["구간", "이름", "현재 속도", "상태", "품질", *[f"{h}분 후" for h in s.horizons]]
     return pd.DataFrame(rows, columns=columns)
+
+
+def timeseries(conn: sqlite3.Connection, segment_id: str, start: datetime, end: datetime, horizon: int, model_version: str, now: datetime) -> pd.DataFrame:
+    """구간 시계열: 시계열 그래프용 실제·예측.
+    `시각`은 target_time 기준 ISO 문자열, `실제`/`예측`은 float, 없으면 NaN.
+    예측은 executed_at <= now 인 것만, 실제값 조인은 available_at <= now 이고 quality_flag가 imputed/missing이 아닌 bin만 사용.
+    """
+    require_aware(start)
+    require_aware(end)
+    require_aware(now)
+    start_iso = to_iso(start)
+    end_iso = to_iso(end)
+    now_iso = to_iso(now)
+    rows = conn.execute(
+        """
+        SELECT p.target_time, p.predicted_value, s.speed
+        FROM traffic_prediction p
+        LEFT JOIN segment_traffic_5min s
+          ON s.segment_id = p.segment_id AND s.bin_time = p.target_time
+         AND s.quality_flag NOT IN ('imputed', 'missing')
+         AND s.available_at <= ?
+        WHERE p.segment_id = ?
+          AND p.horizon = ?
+          AND p.model_version = ?
+          AND p.target_var = 'speed'
+          AND p.executed_at <= ?
+          AND p.target_time >= ?
+          AND p.target_time < ?
+        ORDER BY p.target_time
+        """,
+        (now_iso, segment_id, horizon, model_version, now_iso, start_iso, end_iso),
+    ).fetchall()
+    data = []
+    for r in rows:
+        data.append({
+            "시각": r[0],
+            "실제": float(r[2]) if r[2] is not None else float("nan"),
+            "예측": float(r[1]) if r[1] is not None else float("nan"),
+        })
+    if not data:
+        return pd.DataFrame(columns=["시각", "실제", "예측"])
+    return pd.DataFrame(data)
+
+
+def heatmap(conn: sqlite3.Connection, start: datetime, end: datetime, now: datetime) -> pd.DataFrame:
+    """시간×구간 히트맵: index=bin_time, columns=segment_id, value=speed.
+    missing은 NaN. 히트맵은 보정값(imputed) 포함하여 보여주며, 사용 가능 시점 기준 available_at <= now 만 반영한다.
+    """
+    require_aware(start)
+    require_aware(end)
+    require_aware(now)
+    start_iso = to_iso(start)
+    end_iso = to_iso(end)
+    now_iso = to_iso(now)
+    # 대상 구간 순서
+    segments = [r[0] for r in conn.execute("SELECT segment_id FROM road_segment WHERE is_target = 1 ORDER BY seq")]
+    if not segments:
+        return pd.DataFrame()
+    rows = conn.execute(
+        "SELECT segment_id, bin_time, speed FROM segment_traffic_5min WHERE bin_time >= ? AND bin_time < ? AND available_at <= ? AND speed IS NOT NULL",
+        (start_iso, end_iso, now_iso),
+    ).fetchall()
+    if not rows:
+        # 빈 프레임이지만 컬럼은 유지
+        return pd.DataFrame(columns=segments)
+    df = pd.DataFrame(rows, columns=["segment_id", "bin_time", "speed"])
+    piv = df.pivot(index="bin_time", columns="segment_id", values="speed")
+    # 컬럼 순서 고정
+    piv = piv.reindex(columns=segments)
+    # 인덱스 정렬
+    piv = piv.sort_index()
+    return piv
+
+
+def evaluation_table(conn: sqlite3.Connection, days: int = 7) -> pd.DataFrame:
+    """model_evaluation 최신 행 + 기준 모델 대비 개선율.
+    개선율 = 1 - MAE / persistence MAE (persistence 없음 → NaN)
+    """
+    cols = ["model_version", "eval_type", "period_start", "period_end", "segment_id", "regime", "n_samples", "mae", "rmse", "wape", "grade_accuracy", "evaluated_at"]
+    # 최신 평가 시각
+    max_row = conn.execute("SELECT MAX(evaluated_at) FROM model_evaluation WHERE eval_type = 'live'").fetchone()
+    if not max_row or not max_row[0]:
+        cols_out = cols + ["개선율"]
+        return pd.DataFrame(columns=cols_out)
+    max_eval = parse_iso(max_row[0])
+    since_iso = to_iso(max_eval - timedelta(days=days))
+    rows = list(conn.execute(
+        f"SELECT {', '.join(cols)} FROM model_evaluation WHERE eval_type = 'live' AND evaluated_at >= ? ORDER BY evaluated_at DESC, id DESC",
+        (since_iso,),
+    ))
+    if not rows:
+        cols_out = cols + ["개선율"]
+        return pd.DataFrame(columns=cols_out)
+    df = pd.DataFrame(rows, columns=cols)
+    # 개선율 계산
+    improvements = []
+    for _, row in df.iterrows():
+        mae = row.get("mae")
+        if mae is None or pd.isna(mae):
+            improvements.append(float("nan"))
+            continue
+        # regime에서 horizon 파싱 (h{분}:...)
+        regime = row.get("regime") or ""
+        # persistence 행 찾기
+        pers = conn.execute(
+            """
+            SELECT mae FROM model_evaluation
+            WHERE eval_type = 'live'
+              AND model_version = 'baseline_persistence'
+              AND period_start = ?
+              AND period_end = ?
+              AND segment_id IS ?
+              AND regime = ?
+            """,
+            (row.get("period_start"), row.get("period_end"), row.get("segment_id"), regime),
+        ).fetchone()
+        pers_mae = pers[0] if pers else None
+        if pers_mae is None or pers_mae == 0:
+            improvements.append(float("nan"))
+        else:
+            improvements.append(1.0 - float(mae) / float(pers_mae))
+    df["개선율"] = improvements
+    return df
+
+
+def segment_delays(conn: sqlite3.Connection, now: datetime) -> dict[str, float | None]:
+    """구간별 최신 데이터 지연(분)."""
+    require_aware(now)
+    now_iso = to_iso(now)
+    segments = [r[0] for r in conn.execute("SELECT segment_id FROM road_segment WHERE is_target = 1 ORDER BY seq")]
+    delays: dict[str, float | None] = {}
+    for sid in segments:
+        r = conn.execute(
+            "SELECT MAX(available_at) FROM segment_traffic_5min WHERE segment_id = ? AND available_at <= ? AND speed IS NOT NULL",
+            (sid, now_iso),
+        ).fetchone()
+        latest_str = r[0] if r else None
+        latest = parse_iso(latest_str) if latest_str else None
+        delays[sid] = delay_minutes(latest, now)
+    return delays
+
+
+def active_models(conn: sqlite3.Connection) -> list[str]:
+    """활성 모델 목록을 model_registry에서 조회."""
+    rows = conn.execute("SELECT model_version FROM model_registry WHERE is_active = 1 ORDER BY model_version").fetchall()
+    return [r[0] for r in rows]
 
 
 def collection_status(conn: sqlite3.Connection, limit: int = 10) -> pd.DataFrame:
