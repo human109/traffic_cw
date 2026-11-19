@@ -8,10 +8,12 @@ from __future__ import annotations
 import csv
 import sqlite3
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+from common.timeutil import KST, to_iso
 from config.segments import SEGMENTS
 from database.db import connect, init_db
 from scripts.load_segments import load
@@ -21,7 +23,7 @@ HEADER = "segment_id,seq,link_id,source,link_length_m,is_mainline,nodelink_ver,v
 
 @pytest.fixture
 def conn(tmp_path: Path) -> Iterator[sqlite3.Connection]:
-    c = connect(tmp_path / "t.db")
+    c = connect(tmp_path / "t.db", create=True)
     init_db(c)
     yield c
     c.close()
@@ -186,3 +188,75 @@ def test_missing_required_value_rejected(conn: sqlite3.Connection, tmp_path: Pat
     with pytest.raises(ValueError):
         load(conn, SEGMENTS, csv)
     assert _count(conn, "segment_link") == 0
+
+
+def test_load_closes_links_absent_from_csv(conn: sqlite3.Connection, tmp_path: Path) -> None:
+    # CSV에서 빠진 기존 유효 링크는 이번 적재 시각으로 valid_to를 닫는다(Slice 1 M4).
+    csv1 = _write_csv(
+        tmp_path / "a.csv",
+        [
+            "S1,0,SYN0001,its,100,1,,2026-11-18T00:00:00+09:00",
+            "S1,1,SYN0002,its,100,1,,2026-11-18T00:00:00+09:00",
+        ],
+    )
+    load(conn, SEGMENTS, csv1)
+    csv2 = _write_csv(tmp_path / "b.csv", ["S1,0,SYN0001,its,100,1,,2026-11-18T00:00:00+09:00"])
+    now = datetime(2026, 11, 19, 9, 0, tzinfo=KST)
+    load(conn, SEGMENTS, csv2, now=now)
+    rows = {r["link_id"]: r for r in conn.execute("SELECT * FROM segment_link")}
+    assert rows["SYN0001"]["valid_to"] is None  # CSV에 있으므로 계속 유효
+    assert rows["SYN0002"]["valid_to"] == "2026-11-19T09:00:00+09:00"
+    # 닫힌 링크는 거리 합에서 빠진다
+    d = conn.execute("SELECT distance_m FROM road_segment WHERE segment_id='S1'").fetchone()[0]
+    assert d == pytest.approx(100)
+
+
+def test_reload_same_csv_closes_nothing(conn: sqlite3.Connection, tmp_path: Path) -> None:
+    csv = _write_csv(tmp_path / "a.csv", ["S1,0,SYN0001,its,100,1,,2026-11-18T00:00:00+09:00"])
+    load(conn, SEGMENTS, csv)
+    load(conn, SEGMENTS, csv)  # 같은 CSV를 다시 적재하면 아무것도 닫지 않는다
+    assert all(r["valid_to"] is None for r in conn.execute("SELECT valid_to FROM segment_link"))
+
+
+def test_closed_link_stays_closed(conn: sqlite3.Connection, tmp_path: Path) -> None:
+    # 한 번 닫힌 링크는 뒤의 적재에서 valid_to를 다시 열지 않는다
+    csv1 = _write_csv(
+        tmp_path / "a.csv",
+        ["S1,0,SYN0001,its,100,1,,2026-11-18T00:00:00+09:00"],
+    )
+    load(conn, SEGMENTS, csv1)
+    load(conn, SEGMENTS, _write_csv(tmp_path / "b.csv", []), now=datetime(2026, 11, 19, 9, 0, tzinfo=KST))
+    closed = conn.execute("SELECT valid_to FROM segment_link WHERE link_id='SYN0001'").fetchone()[0]
+    assert closed == "2026-11-19T09:00:00+09:00"
+    load(conn, SEGMENTS, csv1)  # 예전 버전을 다시 적재해도 이미 닫힌 행은 그대로다
+    assert conn.execute("SELECT valid_to FROM segment_link WHERE link_id='SYN0001'").fetchone()[0] == closed
+    assert _count(conn, "segment_link") == 1
+
+
+def test_link_replacement_keeps_distance_and_valid_rows(conn: sqlite3.Connection, tmp_path: Path) -> None:
+    # 링크 교체 시나리오: 한 링크 ID만 다른 ID로 바꾸고 길이는 같다.
+    csv1 = _write_csv(
+        tmp_path / "a.csv",
+        [
+            "S1,0,SYN0001,its,100,1,,2026-11-18T00:00:00+09:00",
+            "S1,1,SYN0002,its,100,1,,2026-11-18T00:00:00+09:00",
+        ],
+    )
+    load(conn, SEGMENTS, csv1)
+    csv2 = _write_csv(
+        tmp_path / "b.csv",
+        [
+            "S1,0,SYN0001,its,100,1,,2026-11-18T00:00:00+09:00",
+            "S1,1,SYN0009,its,100,1,,2026-11-18T00:00:00+09:00",  # SYN0002 → SYN0009 교체
+        ],
+    )
+    now = datetime(2026, 11, 19, 9, 0, tzinfo=KST)
+    load(conn, SEGMENTS, csv2, now=now)
+    rows = {r["link_id"]: r for r in conn.execute("SELECT * FROM segment_link")}
+    assert rows["SYN0002"]["valid_to"] == to_iso(now)  # 옛 링크는 이번 적재 시각으로 닫힌다
+    assert rows["SYN0009"]["valid_to"] is None  # 새 링크는 유효
+    assert rows["SYN0001"]["valid_to"] is None  # 관계없는 링크는 그대로
+    # 유효 행 수와 구간 거리는 변하지 않는다
+    assert conn.execute("SELECT COUNT(*) FROM segment_link WHERE valid_to IS NULL").fetchone()[0] == 2
+    d = conn.execute("SELECT distance_m FROM road_segment WHERE segment_id='S1'").fetchone()[0]
+    assert d == pytest.approx(200)

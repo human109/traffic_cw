@@ -2,6 +2,8 @@
 
 - `road_segment`: segment_id 기준 UPSERT. `is_active`는 건드리지 않는다.
 - `segment_link`: UNIQUE(source, link_id, valid_from) 기준 UPSERT.
+- CSV에 없는 기존 유효(valid_to IS NULL) 링크는 이번 적재 시각으로 `valid_to`를 닫는다(Slice 1 M4).
+  같은 CSV를 다시 적재하면 아무것도 닫지 않는다.
 - CSV 빈 값은 NULL로 넣는다(길이 모름 ≠ 0). NOT NULL 컬럼이 비어 있으면 `ValueError`.
 - `valid_from`은 KST ISO(`YYYY-MM-DDTHH:MM:SS+09:00`)로 정규화한다. 오프셋이 없으면 `ValueError`.
 - `road_segment.distance_m` = 유효(valid_to IS NULL) 본선 링크 길이 합. 길이 NULL이 하나라도 있거나
@@ -12,10 +14,11 @@ from __future__ import annotations
 
 import csv
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 from common.logsetup import get_logger
-from common.timeutil import parse_iso, to_iso
+from common.timeutil import now_kst, parse_iso, to_iso
 
 log = get_logger("scripts.load_segments")
 
@@ -52,17 +55,24 @@ def _read_links(links_csv: Path) -> list[dict]:
     return rows
 
 
-def load(conn: sqlite3.Connection, segments: list[dict], links_csv: Path) -> tuple[int, int]:
+def load(
+    conn: sqlite3.Connection, segments: list[dict], links_csv: Path, now: datetime | None = None
+) -> tuple[int, int]:
     """구간과 링크를 UPSERT하고 (구간 수, 링크 수)를 돌려준다. 다시 실행해도 결과가 같다.
+
+    `now`는 이번 적재 시각(기본 `now_kst()`)이다. CSV에 없는 기존 유효 링크의 `valid_to`를 이
+    시각으로 닫는다(Slice 1 M4). 이미 닫힌 링크는 다시 열지 않는다.
 
     트랜잭션 동작:
     - CSV 검증(필수 값, `is_mainline` 0/1, `valid_from` 오프셋 포함 ISO8601)을 DB 쓰기 전에 끝낸다.
       검증 실패는 `ValueError`이며 DB에 아무것도 쓰지 않는다.
-    - 구간·링크 UPSERT와 `distance_m` 갱신을 한 트랜잭션으로 실행하고 끝에서 commit한다.
+    - 구간·링크 UPSERT, 유효 링크 닫기, `distance_m` 갱신을 한 트랜잭션으로 실행하고 끝에서 commit한다.
       도중 오류(예: 없는 segment_id로 인한 FK 위반 `sqlite3.IntegrityError`)가 나면 rollback 후
       예외를 다시 던진다. 따라서 호출 전에 커밋하지 않은 변경이 conn에 있으면 함께 롤백된다.
     """
     links = _read_links(Path(links_csv))
+    close_at = to_iso(now) if now is not None else to_iso(now_kst())
+    keys = {(r["source"], r["link_id"], r["valid_from"]) for r in links}
     try:
         conn.executemany(
             """
@@ -93,6 +103,7 @@ def load(conn: sqlite3.Connection, segments: list[dict], links_csv: Path) -> tup
             """,
             links,
         )
+        _close_links_absent_from_csv(conn, keys, close_at)
         # 길이를 하나라도 모르면 합계도 모른다 → NULL. 링크가 없으면 SUM이 NULL.
         conn.execute(
             """
@@ -111,3 +122,25 @@ def load(conn: sqlite3.Connection, segments: list[dict], links_csv: Path) -> tup
         raise
     log.info("구간 %d개, 링크 %d개 적재", len(segments), len(links))
     return len(segments), len(links)
+
+
+def _close_links_absent_from_csv(
+    conn: sqlite3.Connection, keys: set[tuple[str, str, str]], close_at: str
+) -> None:
+    """CSV에 없는 유효(valid_to IS NULL) 링크의 `valid_to`를 `close_at`으로 닫는다.
+
+    닫는 기준은 UPSERT 키(source, link_id, valid_from)다. 이미 닫힌 행은 다시 열지 않고,
+    키가 같으면 값이 바뀌어도 닫지 않는다.
+    """
+    stale = [
+        r["id"]
+        for r in conn.execute(
+            "SELECT id, source, link_id, valid_from FROM segment_link WHERE valid_to IS NULL"
+        ).fetchall()
+        if (r["source"], r["link_id"], r["valid_from"]) not in keys
+    ]
+    if stale:
+        conn.executemany(
+            "UPDATE segment_link SET valid_to = ? WHERE id = ?", [(close_at, i) for i in stale]
+        )
+        log.info("CSV에 없는 링크 %d개의 valid_to를 %s로 닫는다", len(stale), close_at)

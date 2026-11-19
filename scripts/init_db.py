@@ -16,9 +16,11 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(ROOT))
 
 from common.logsetup import get_logger  # noqa: E402
+from common.timeutil import now_kst  # noqa: E402
 from config.segments import SEGMENTS  # noqa: E402
 from config.settings import get_settings  # noqa: E402
 from database.db import connect, init_db  # noqa: E402
+from scripts.load_calendar import load as load_calendar  # noqa: E402
 from scripts.load_segments import load  # noqa: E402
 
 LINKS_CSV = ROOT / "config" / "segment_links.csv"
@@ -27,19 +29,19 @@ log = get_logger("scripts.init_db")
 
 
 def main() -> int:
-    """`data/` 디렉터리를 만들고 스키마 생성과 시드 적재를 수행한다."""
+    """DB 파일을 새로 만들고 스키마 생성, 구간·링크 시드, 올해·내년 달력 적재를 수행한다."""
     db_path = Path(get_settings().db_path)
     if not db_path.is_absolute():
-        # 실행 위치와 상관없이 저장소 루트 기준으로 해석한다.
+        # 실행 위치와 상관없이 저장소 루트 기준으로 해석한다(connect와 같은 기준).
         db_path = ROOT / db_path
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = connect(db_path)
+    conn = connect(db_path, create=True)  # 새 DB를 만들 수 있는 곳은 여기뿐이다(C-06 v2)
     try:
         init_db(conn)
         n_seg, n_link = load(conn, SEGMENTS, LINKS_CSV)
+        n_cal = load_calendar(conn, [now_kst().year, now_kst().year + 1])
     finally:
         conn.close()
-    log.info("DB 초기화 완료: %s (구간 %d, 링크 %d)", db_path, n_seg, n_link)
+    log.info("DB 초기화 완료: %s (구간 %d, 링크 %d, 달력 %d행)", db_path, n_seg, n_link, n_cal)
     return 0
 
 
