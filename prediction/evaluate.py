@@ -132,6 +132,7 @@ def _collect(
     window_start = time.fromisoformat(settings.eval_window[0])
     window_end = time.fromisoformat(settings.eval_window[1])
     onset_cache: dict[tuple[str, str], float | None] = {}
+    warned_missing_calendar: set[str] = set()  # 같은 날짜 경고는 1회만
 
     samples: Samples = defaultdict(list)
     for r in rows:
@@ -144,8 +145,9 @@ def _collect(
         if date_key in calendar:
             if calendar[date_key] == 1:
                 continue
-        else:
+        elif date_key not in warned_missing_calendar:
             # 평일인데 달력 행이 없으면 공휴일 여부를 모른다. 주말만 제외하고 평가한다 (C-04).
+            warned_missing_calendar.add(date_key)
             log.warning(
                 "calendar_info에 %s 행이 없어 공휴일을 확인할 수 없다. 주말만 제외하고 평가한다.",
                 date_key,

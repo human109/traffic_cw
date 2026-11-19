@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 상태 | frozen |
-| 버전 | v1.1 |
+| 버전 | v1.2 |
 | 영향 받는 에이전트 | dev-ml, dev-dashboard, (Phase 2) dev-publisher |
 | 계약 테스트 | `tests/prediction/`, `tests/integration/` |
 
@@ -15,7 +15,7 @@
 |---|---|---|---|
 | `baseline_persistence` | `baseline_persistence` | 최신 사용 가능 bin의 speed | bin 없음, stale, speed NULL |
 | `baseline_recent15` | `baseline_recent15` | 최신 사용 가능 bin을 포함한 직전 3 bin(`recent_mean_minutes`) 중 speed가 있는 값의 평균 | 그런 값이 2개 미만 |
-| `baseline_dow_mean` | `baseline_dow_mean` | `available_at ≤ now`인 과거 데이터에서, `target_time`과 같은 요일·같은 HH:MM bin의 speed 평균(`imputed` 제외) | 서로 다른 주가 `dow_mean_min_weeks`(3) 미만 |
+| `baseline_dow_mean` | `baseline_dow_mean` | `available_at ≤ now`, `base_time − 8주 ≤ bin_time ≤ base_time`인 과거 데이터에서, `target_time`과 같은 요일·같은 HH:MM bin의 speed 평균(`imputed` 제외) (v1.2: 8주 하한) | 서로 다른 주가 `dow_mean_min_weeks`(3) 미만 |
 
 - 세 모델 모두 `model_registry.horizon=0`(horizon 공통), `target_var='speed'`, `is_active=1`.
 - 세 모델은 같은 `base_time`으로 매 실행마다 함께 저장한다.
@@ -50,5 +50,6 @@
 
 | 버전 | 일자 | 변경 | CR 출처 |
 |---|---|---|---|
+| v1.2 | 2026-11-20 | dow_mean 조회 하한 8주(`prediction.baselines.DOW_MEAN_LOOKBACK_WEEKS`) | D-ML-02 |
 | v1.1 | 2026-11-19 | 평가 교체 키를 period_end 날짜 기준으로 명시. dow_mean 표본은 `bin_time ≤ base_time` | Task 4 구현·리뷰 |
 | v1 | 2026-11-19 | 기준 모델 3종, backfill 규칙, 평가 행 정의 | Slice 1 계획, Slice 0 리뷰 |

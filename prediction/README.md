@@ -10,7 +10,7 @@
 |---|---|---|
 | `baseline_persistence` | 최신 사용 가능 bin의 speed | bin 없음, stale, speed NULL |
 | `baseline_recent15` | 최신 사용 가능 bin 포함 직전 15분(3 bin) 중 speed가 있는 값의 평균 | 그런 값이 2개 미만 |
-| `baseline_dow_mean` | `available_at ≤ now` 과거 데이터에서 target_time과 같은 요일·같은 HH:MM bin의 speed 평균(`imputed` 제외) | 값이 있는 서로 다른 주가 3주(`dow_mean_min_weeks`) 미만 |
+| `baseline_dow_mean` | `available_at ≤ now` 과거 데이터에서 target_time과 같은 요일·같은 HH:MM bin의 speed 평균(`imputed` 제외). 조회 하한은 `base_time − 8주`(`DOW_MEAN_LOOKBACK_WEEKS`) | 값이 있는 서로 다른 주가 3주(`dow_mean_min_weeks`) 미만 |
 
 - 세 모델 모두 `model_registry.horizon=0`, `target_var='speed'`, `is_active=1`이고, 같은 `base_time`으로 매 실행마다 함께 저장한다.
 - `base_time`은 `available_at ≤ now`이고 stale(10분)이 아닌 최신 bin. 없으면 `floor_5min(now) − 5분`.
@@ -39,6 +39,7 @@
   `grade_accuracy = grade(pred) == grade(actual)` 비율(`common.grades.grade`).
 - 같은 (model_version, eval_type, period_end 날짜, segment_id, regime) 행이 있으면 교체한다.
   표본이 0인 조합은 행을 만들지 않는다.
+- `calendar_info`에 없는 평일 날짜는 실행당 1회만 경고한다(같은 날짜 표본이 여러 개여도).
 - 합성 데이터로 계산한 지표를 실제 성능으로 보고하지 않는다(C-04 불변 조건).
 
 ## 코드 위치
@@ -47,7 +48,7 @@
 |---|---|
 | 공개 진입점 `predict_latest`, `backfill_actuals`, `evaluate` (C-06) | `prediction/__init__.py` |
 | 모델 버전 상수, registry 등록, 최신 bin 선택, 예측 행 저장(skipped 덮어쓰기), backfill | `prediction/baseline.py` |
-| recent15(최근 15분 평균), dow_mean(과거 동일 요일·시간대 평균) | `prediction/baselines.py` |
+| recent15(최근 15분 평균), dow_mean(과거 동일 요일·시간대 평균, 표본 조회 하한 8주) | `prediction/baselines.py` |
 | 평가(기간 필터, regime, 지표, `model_evaluation` 저장) | `prediction/evaluate.py` |
 | 테스트 | `tests/prediction/` (`test_persistence.py`, `test_baselines.py`, `test_evaluate.py`) |
 

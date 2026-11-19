@@ -123,7 +123,10 @@ def test_eval_excludes_weekend_and_holiday(
     rows = _eval_rows(fixture_conn)
     assert rows[(PERSISTENCE_VERSION, "h5:all", None)]["n_samples"] == 2
     # calendar_info에 없는 평일은 주말만 빼고 평가하며 경고를 남긴다
-    assert any("calendar_info" in r.message for r in caplog.records)
+    calendar_warnings = [r for r in caplog.records if "calendar_info" in r.message]
+    assert calendar_warnings  # 경고 자체는 남는다
+    # 11-17 표본이 2개여도 같은 날짜 경고는 1회뿐이어야 한다
+    assert len(calendar_warnings) == 1
 
 
 def test_eval_requires_actual_and_predicted(fixture_conn: sqlite3.Connection) -> None:

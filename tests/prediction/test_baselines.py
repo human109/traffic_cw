@@ -84,6 +84,20 @@ def test_recent15_mean(fixture_conn: sqlite3.Connection) -> None:
         assert r["base_time"] == to_iso(BASE)
 
 
+def test_recent15_imputed_degraded(fixture_conn: sqlite3.Connection) -> None:
+    # 평균의 근거 bin 중 imputed(보정값)가 섞이면 degraded다 (C-04 입력 품질).
+    insert_bin(fixture_conn, "S1", t(16, 6, 50), 45.0)
+    insert_bin(fixture_conn, "S1", t(16, 6, 55), 50.0, flag="imputed", is_imputed=1)
+    insert_bin(fixture_conn, "S1", BASE, 55.0)
+    predict_latest(NOW, conn=fixture_conn)
+
+    recent = _preds(fixture_conn, RECENT15_VERSION)
+    assert len(recent) == 4
+    for r in recent.values():
+        assert r["predicted_value"] == pytest.approx(50.0)  # (45+50+55)/3, 보정값도 값으로는 쓴다
+        assert r["input_quality"] == "degraded"
+
+
 def test_recent15_needs_two(fixture_conn: sqlite3.Connection) -> None:
     # S1: 값이 1개뿐 → skipped
     insert_bin(fixture_conn, "S1", t(16, 6, 55), None, flag="missing", available_at=t(16, 7, 0))
@@ -161,6 +175,30 @@ def test_dow_mean_value(fixture_conn: sqlite3.Connection) -> None:
     for h in (5, 10, 30):  # 다른 HH:MM은 표본이 없다
         assert dow[h]["predicted_value"] is None
         assert dow[h]["input_quality"] == "skipped"
+
+
+def test_dow_mean_lookback_8_weeks(fixture_conn: sqlite3.Connection) -> None:
+    # dow_mean 조회는 base_time − 8주를 하한으로 둔다. 경계(정확히 8주 전)는 포함.
+    # 모두 2026년 월요일: 09-07은 10주 전(제외), 09-21은 정확히 8주 전(포함).
+    for month, day, value in [
+        (9, 7, 200.0),
+        (9, 21, 60.0),
+        (10, 5, 30.0),
+        (10, 12, 40.0),
+        (11, 2, 50.0),
+    ]:
+        insert_bin(fixture_conn, "S1", t(day, 7, 15, month=month), value)
+    # S2: 하한 안 2주 + 하한 밖 1주 → 세 주로 세면 안 된다
+    for month, day, value in [(9, 14, 60.0), (10, 26, 40.0), (11, 9, 50.0)]:
+        insert_bin(fixture_conn, "S2", t(day, 7, 15, month=month), value)
+
+    predict_latest(NOW, conn=fixture_conn)
+    s1 = _preds(fixture_conn, DOW_MEAN_VERSION, "S1")
+    assert s1[15]["predicted_value"] == pytest.approx(45.0)  # (60+30+40+50)/4, 09-07 제외
+    assert s1[15]["input_quality"] == "ok"
+    s2 = _preds(fixture_conn, DOW_MEAN_VERSION, "S2")
+    assert s2[15]["predicted_value"] is None  # 하한 안 2주뿐 → skipped
+    assert s2[15]["input_quality"] == "skipped"
 
 
 def test_skipped_overwritten_by_late_bin(fixture_conn: sqlite3.Connection) -> None:
