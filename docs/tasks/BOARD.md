@@ -39,7 +39,7 @@
 | ID | 작업 | 소유 | 선행 | 상태 |
 |---|---|---|---|---|
 | T-OPS-01 | 에이전트별 모델 지정과 제한 시 대체 모델 규칙 문서화 | orchestrator | - | done |
-| D-DSH-01 | 구간별 현재 속도 표의 '상태'(원활/서행/정체) 글씨 색 구분 | dev-dashboard | - | in_progress |
+| D-DSH-U01 | 구간별 현재 속도 표의 '상태'(원활/서행/정체) 글씨 색 구분 | dev-dashboard | - | done (reviewer 승인, 24 passed) |
 
 ### Slice 1 후보 (리뷰에서 나온 후속 과제)
 
@@ -48,6 +48,8 @@
 | Task 7 리뷰 | skipped 예측 행이 같은 base_time의 늦은 정상 예측을 막음(INSERT OR IGNORE) → skipped만 덮어쓰기 |
 | Task 7 리뷰 | backfill 조회 범위 제한, 예외 시 rollback |
 | Task 8 리뷰 | degraded 예측 회색 표시, 구간별 지연 판단, 수집 시각 별도 표시 |
+| D-DSH-U01 리뷰 | 다크 테마에서 상태 색 대비를 WCAG AA(4.5:1)까지 올리기(현재 3:1 기준) |
+| D-DSH-U01 리뷰 | `data.grade` 라벨 집합과 `STATUS_TEXT_COLORS` 키의 일치를 테스트로 고정 |
 | Task 6 | 70% 부분 관측 기준, forward fill(2 bin), 측도 `speed_side` |
 | 실측 | `partial` 원인: 부모 링크가 체인에 없는 4140068801(S3 본선)·4150149001(S6 측도) — ITS 응답에서 대응 링크 확인 |
 | 방향 검증 | 4140071400(S3)의 ITS 끝 교차로(41400574)가 2026 노드링크(41402077)와 다름 — 링크 경계 변경으로 추정, ITS 쪽 후속 링크 확인해 매핑 보정 |

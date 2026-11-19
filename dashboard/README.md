@@ -32,6 +32,7 @@ DB 경로는 `config.settings.get_settings().db_path`(기본 `data/traffic.db`, 
 ## 코드 구조
 
 - `data.py`: 조회·가공 순수 함수. `conn`을 인자로 받으므로 테스트에서 합성 DB를 넘긴다.
-- `app.py`: Streamlit 화면. `database.db.connect(readonly=True)`로 연결한다.
+- `style.py`: 상태 문자열 → 글씨색(hex) 매핑 순수 함수(`status_text_color`). `data.py`는 값만 유지하고 색은 여기서.
+- `app.py`: Streamlit 화면. `database.db.connect(readonly=True)`로 연결한다. 상태 열은 `style.py` 매핑으로 색을 입힌다.
 
 테스트: `.venv\Scripts\python -m pytest tests/dashboard -q`

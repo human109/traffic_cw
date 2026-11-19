@@ -25,6 +25,7 @@ from dashboard.data import (  # noqa: E402
     delay_minutes,
     latest_available_at,
 )
+from dashboard.style import status_text_color  # noqa: E402
 
 
 @st.fragment(run_every=60)
@@ -53,7 +54,11 @@ def render() -> None:
 
         st.subheader("구간별 현재 속도·예측 (km/h)")
         st.caption("상태는 속도 기준 파생값(SPEC 9.2). 예측은 기준 모델(baseline_persistence).")
-        st.dataframe(current_table(conn, now, s), hide_index=True)
+        # 상태 열에만 등급별 글씨색을 입힌다. 데이터 함수(current_table)는 순수하게 값을 유지한다.
+        st.dataframe(
+            current_table(conn, now, s).style.map(status_text_color, subset=["상태"]),
+            hide_index=True,
+        )
 
         st.subheader("최근 수집 결과")
         log = collection_status(conn)
