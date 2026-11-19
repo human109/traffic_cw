@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 상태 | frozen |
-| 버전 | v1.2 |
+| 버전 | v1.3 |
 | 영향 받는 에이전트 | 전체 |
 | 계약 테스트 | `tests/contracts/test_c01_schema.py` |
 
@@ -33,6 +33,7 @@ DDL 원문은 `docs/contracts/C-01-schema.sql`이다. `database/schema.sql`은 �
 
 | 버전 | 일자 | 변경 | CR 출처 |
 |---|---|---|---|
+| v1.3 | 2026-11-20 | 인덱스 `ix_pred_target_time` 추가(backfill·평가 기간 조회). `IF NOT EXISTS`라 운영 DB에 `init_db`로 안전하게 적용 | Slice 1 Task 4 리뷰 |
 | v1.2 | 2026-11-19 | DDL 변경 없음. partial 70% 기준, imputed·speed_side·갱신 정지 규칙 정의 | Slice 1 계획 |
 | v1.1 | 2026-11-18 | DDL 변경 없음. `segment_link.source`의 의미(링크 ID 체계 출처)를 명시 | Task 5 리뷰 I-1 |
 | v1 | 2026-11-18 | SPEC 5장·20.6 DDL 확정. `IF NOT EXISTS` 추가, `segment_traffic_5min`에 `unweighted` 플래그, `calendar_info` 방학·휴가 컬럼 NULL 허용 | Slice 0 계획, R-05 |

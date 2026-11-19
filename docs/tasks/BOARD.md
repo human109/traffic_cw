@@ -65,6 +65,29 @@
 | Slice 1 Task 4 리뷰 | dow_mean 조회에 하한 없음(데이터 축적에 비례), 세그먼트당 1회 쿼리로 묶기 / `traffic_prediction(target_time)` 인덱스(C-01 CR) / calendar 누락 경고 날짜별 1회 / recent15 근거에 imputed 섞일 때 degraded 테스트 |
 | 실측 | ITS 응답 6,792건 중 창원대로 37건만 필요 — 조회 범위(bbox)를 창원대로 좌표로 좁혀 저장량 축소 |
 
+## Slice 1.5 — 운영 보강 (2026-11-20 시작, 계약 C-01 v1.3 · C-06 v2.2)
+
+| ID | 작업 | 소유 | 상태 |
+|---|---|---|---|
+| D-DAT-05 | `schema.sql`에 `ix_pred_target_time` 반영, `scripts/collection_rate.py`(성공률), `scripts/backup_db.py`(일일 백업 14일 보관) | dev-data | in_progress |
+| D-COL-06 | `maintenance.prune_raw`(원본 30일 보관), 스케줄러에 일일 백업(03:00)·원본 정리 job, 평가 시각을 settings로, `--once --evaluate` 문서 | dev-collector | in_progress |
+| D-ML-02 | dow_mean 조회를 세그먼트당 1회·기간 하한으로, calendar 누락 경고 날짜별 1회, recent15 imputed→degraded 테스트 | dev-ml | in_progress |
+| D-DSH-02 | 성능 탭에 날짜별 수집 성공률(목표 95%), `use_container_width` → `width` | dev-dashboard | waiting (D-DAT-05) |
+| R-06b-2 | 출근 방향 최종 비교(07:00~09:00 전체) | researcher | 09:15 이후 |
+| I-03 | 운영 반영(`init_db`로 인덱스 적용, 수집기 재시작), Slice 0 완료 판정(11/20·23·24) | orchestrator + 사람 | waiting |
+
+## 이후 일정
+
+| 시점 | 단계 |
+|---|---|
+| 11/24(화) | Slice 0 완료 판정 (평일 3일 성공률 ≥ 95%) |
+| 11/23~12/2 | Slice 2 준비: C-03 특성 계약, 특성 생성·XGBoost 학습 코드(합성) |
+| 12/3~ | Slice 2: 실데이터 첫 학습, 기준 모델 비교 |
+| 12/10 무렵 | dow_mean 기준 모델 표본 3주 도달 |
+| 12월 말 | 겨울방학 시작 (계절 구분 표시) |
+| 2027-01-14 무렵 | Slice 3 정식 walk-forward 평가 |
+| 선택 | Slice 4 시민 공개 |
+
 ## 다음 슬라이스 (계획 작성 전)
 
 | 슬라이스 | 주요 작업 |

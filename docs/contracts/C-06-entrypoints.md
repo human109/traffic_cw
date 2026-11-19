@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 상태 | frozen |
-| 버전 | v2.1 |
+| 버전 | v2.2 |
 | 영향 받는 에이전트 | 전체 |
 | 계약 테스트 | 각 모듈 테스트 + `tests/integration/` |
 
@@ -21,6 +21,9 @@
 | prediction | `prediction.backfill_actuals(now: datetime, conn: sqlite3.Connection \| None = None) -> int` | 대상 시각이 지난 예측의 실제값·오차를 갱신하고 갱신 건수 반환 |
 | prediction | `prediction.evaluate(now: datetime, conn: sqlite3.Connection \| None = None, days: int = 7) -> int` | (v2) C-04 평가 행을 `model_evaluation`에 저장하고 행 수 반환 |
 | scripts | `scripts.load_calendar.load(conn: sqlite3.Connection, years: list[int]) -> int` | (v2) `calendar_info` UPSERT, 행 수 반환 |
+| scripts | `scripts.collection_rate.rate(conn, start_date: date, end_date: date) -> list[DayRate]` | (v2.2) 날짜별 수집 성공률. `DayRate(date, is_service_day, expected, observed, rate)`; 평일·비공휴일이 아니면 `is_service_day=False`, rate None |
+| scripts | `scripts.backup_db.backup(now: datetime, conn=None) -> Path` | (v2.2) `backup_dir/traffic_YYYYMMDD.db` 온라인 백업(sqlite backup API), `backup_keep_days`보다 오래된 백업 삭제 |
+| collector | `collector.maintenance.prune_raw(now: datetime, settings=None) -> int` | (v2.2) `raw_keep_days`보다 오래된 원본 날짜 폴더 삭제, 지운 파일 수 반환 |
 | database | `database.db.connect(..., create: bool = False)` | (v2) 상대 경로는 저장소 루트 기준. 쓰기 연결에서 DB 파일이 없고 `create=False`면 `FileNotFoundError`. `scripts/init_db.py`만 `create=True` |
 
 ## 불변 조건
@@ -34,6 +37,7 @@
 
 | 버전 | 일자 | 변경 | CR 출처 |
 |---|---|---|---|
+| v2.2 | 2026-11-20 | 운영 보강: `collection_rate.rate`, `backup_db.backup`, `maintenance.prune_raw` | Slice 1.5 |
 | v2.1 | 2026-11-20 | `collector.run_once`에 키워드 전용 `settings`, `clock` 확장 명시 | Slice 1 Task 6 |
 | v2 | 2026-11-19 | `prediction.evaluate`, `scripts.load_calendar.load`, `connect(create=)` 추가 | Slice 1 계획, Slice 0 최종 리뷰 M3 |
 | v1 | 2026-11-18 | Slice 0 진입점 확정 | Slice 0 계획 |

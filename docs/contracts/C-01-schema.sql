@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS traffic_prediction (
     abs_error        REAL,
     UNIQUE (segment_id, base_time, horizon, target_var, model_version)
 );
+CREATE INDEX IF NOT EXISTS ix_pred_target_time ON traffic_prediction (target_time);
 
 CREATE TABLE IF NOT EXISTS model_evaluation (
     id              INTEGER PRIMARY KEY,

@@ -66,6 +66,17 @@ class Settings:
     industrial_vacations: tuple[tuple[str, str], ...] = (("2026-08-03", "2026-08-07"),)
     school_vacations: tuple[tuple[str, str], ...] = ()
 
+    # --- 운영 (Slice 1.5) ---
+    eval_cron_hour: int = 10  # 일일 평가 실행 시각 (출근 시간대가 끝난 뒤)
+    eval_cron_minute: int = 5
+    backup_dir: str = "data/backup"
+    backup_keep_days: int = 14  # SPEC 5.1
+    backup_cron_hour: int = 3  # 일일 DB 백업 시각
+    raw_keep_days: int = 30  # 원본 응답 파일 보관 기간 (하루 약 30MB)
+    # 수집 성공률 (BOARD 정의): 평일·비공휴일 이 시간대의 5분 bin × 예측 대상 구간 중 실제 값이 있는 비율
+    rate_window: tuple[str, str] = ("06:00", "10:00")  # bin_time 기준, 시작 포함·끝 제외
+    rate_target: float = 0.95
+
     collect_cron_minute: str = "*/5"
     # 예정 시각에서 이만큼 늦어도 그 회차를 실행한다. 절전 등으로 더 늦으면 건너뛰고 다음 회차부터 실행한다.
     scheduler_misfire_grace_s: int = 60
