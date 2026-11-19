@@ -22,11 +22,16 @@ from common.timeutil import KST
 from config.settings import Settings
 
 NOW = datetime(2026, 11, 16, 7, 0, 40, tzinfo=KST)
+SYN_ROAD = "합성도로"
 
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(its_api_key="TESTKEY", raw_dir=str(tmp_path / "raw"))
+    # 합성 픽스처 XML의 roadName은 "합성도로"다 (C-02 v2 저장 범위).
+    return replace(
+        Settings(its_api_key="TESTKEY", raw_dir=str(tmp_path / "raw")),
+        its_store_road_names=(SYN_ROAD,),
+    )
 
 
 class FakeAdapter:
@@ -81,6 +86,9 @@ def test_success_stores_records_and_raw(fixture_conn: sqlite3.Connection, settin
     raw = Path(row["raw_file"])
     assert raw == Path(settings.raw_dir) / "its" / "20261116" / "070040.xml.gz"
     assert gzip.decompress(raw.read_bytes()) == its_sample_xml
+
+    cols = {r[1] for r in fixture_conn.execute("PRAGMA table_info(traffic_observation)")}
+    assert "road_name" not in cols  # road_name은 DB에 쓰지 않는다
 
     empty = fixture_conn.execute(
         "SELECT speed FROM traffic_observation WHERE source='its' AND link_id='SYN0000003'"
@@ -176,6 +184,57 @@ def test_no_readable_items_failed(fixture_conn: sqlite3.Connection, settings: Se
     assert result.error_message == "응답에 읽을 수 있는 item 없음"
     log = _logs(fixture_conn)[0]
     assert (log["status"], log["error_message"]) == ("failed", "응답에 읽을 수 있는 item 없음")
+    assert _obs_count(fixture_conn) == 0
+
+
+def _road_xml(roads: list[tuple[str, str]]) -> bytes:
+    """synthetic: (link_id, roadName) 목록으로 만든 ITS 응답."""
+    items = "".join(
+        f"<item><roadName> {road} </roadName><linkId>{lid}</linkId><speed>50.0</speed>"
+        "<travelTime>30.0</travelTime><createdDate>20261116070001</createdDate></item>"
+        for lid, road in roads
+    )
+    return (
+        "<response><header><resultCode>0</resultCode><resultMsg>SUCCESS</resultMsg></header>"
+        f"<body><totalCount>{len(roads)}</totalCount><items>{items}</items></body></response>"
+    ).encode("utf-8")
+
+
+def test_store_scope_only_target_road(fixture_conn: sqlite3.Connection, settings: Settings) -> None:
+    roads = [
+        ("SYN0000001", SYN_ROAD),
+        ("SYN0000002", SYN_ROAD),
+        ("SYN0000901", "다른도로"),
+        ("SYN0000902", "다른도로"),
+        ("SYN0000903", "다른도로"),
+    ]
+    body = _road_xml(roads)
+    result = run_once(NOW, fixture_conn, FakeAdapter(settings, FetchResult(body, 200, None)), settings=settings)
+    assert result.record_count == 2
+    assert result.status == "partial"  # 대상 링크 6개 중 2개
+    assert result.links_received == 2
+    ids = {r[0] for r in fixture_conn.execute("SELECT link_id FROM traffic_observation WHERE source='its'")}
+    assert ids == {"SYN0000001", "SYN0000002"}
+    raw = Path(settings.raw_dir) / "its" / "20261116" / "070040.xml.gz"
+    assert gzip.decompress(raw.read_bytes()) == body  # 원본은 응답 전체
+    assert gzip.decompress(raw.read_bytes()).count(b"<item>") == 5
+
+
+def test_no_store_road_failed(fixture_conn: sqlite3.Connection, settings: Settings) -> None:
+    body = _road_xml([("SYN0000001", "다른도로"), ("SYN0000002", "다른도로")])
+    result = run_once(NOW, fixture_conn, FakeAdapter(settings, FetchResult(body, 200, None)), settings=settings)
+    assert result.status == "failed"
+    assert result.record_count == 0
+    assert result.error_message == "저장 대상 도로 item 없음"
+    assert _obs_count(fixture_conn) == 0
+    assert _logs(fixture_conn)[0]["error_message"] == "저장 대상 도로 item 없음"
+
+
+def test_default_store_road_excludes_fixture(fixture_conn: sqlite3.Connection, tmp_path: Path, its_sample_xml: bytes) -> None:
+    # 기본 설정("창원대로")으로는 합성도로 응답을 저장하지 않는다.
+    s = Settings(its_api_key="TESTKEY", raw_dir=str(tmp_path / "raw"))
+    result = run_once(NOW, fixture_conn, FakeAdapter(s, FetchResult(its_sample_xml, 200, None)), settings=s)
+    assert result.status == "failed"
     assert _obs_count(fixture_conn) == 0
 
 

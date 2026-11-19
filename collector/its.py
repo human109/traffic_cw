@@ -200,6 +200,7 @@ class ItsAdapter:
                         volume=None,
                         congestion_code=None,
                         quality_flag=self._quality_flag(speed),
+                        road_name=_text(item, "roadName"),
                     )
                 )
             except ValueError as e:

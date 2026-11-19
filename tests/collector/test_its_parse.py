@@ -55,6 +55,19 @@ def test_parse_fields(adapter: ItsAdapter, its_sample_xml: bytes) -> None:
     assert r1.quality_flag == "ok"
 
 
+def test_parse_road_name(adapter: ItsAdapter, its_sample_xml: bytes) -> None:
+    records = adapter.parse(its_sample_xml, COLLECTED_AT)
+    assert {r.road_name for r in records} == {"합성도로"}
+    body = _xml(
+        "<item><roadName>  다른도로 </roadName><linkId>SYN0000009</linkId><speed>30</speed>"
+        "<createdDate>20261116070001</createdDate></item>"
+        "<item><roadName/><linkId>SYN0000008</linkId><speed>30</speed>"
+        "<createdDate>20261116070001</createdDate></item>"
+    )
+    by_id = {r.link_id: r.road_name for r in adapter.parse(body, COLLECTED_AT)}
+    assert by_id == {"SYN0000009": "다른도로", "SYN0000008": None}  # 공백 제거, 빈 태그는 None
+
+
 def test_speed_flags(adapter: ItsAdapter, its_sample_xml: bytes) -> None:
     by_id = {r.link_id: r for r in adapter.parse(its_sample_xml, COLLECTED_AT)}
     empty = by_id["SYN0000003"]

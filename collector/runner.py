@@ -19,6 +19,20 @@ from config.settings import Settings
 log = get_logger(__name__)
 
 NO_ITEMS_ERROR = "응답에 읽을 수 있는 item 없음"
+NO_STORE_ROAD_ERROR = "저장 대상 도로 item 없음"
+
+
+def _store_scope(records: list[ObservationRecord], source: str, settings: Settings) -> list[ObservationRecord]:
+    """DB에 저장할 레코드만 남긴다 (C-02 v2 저장 범위).
+
+    ITS는 `road_name`이 `settings.its_store_road_names`에 속하는 레코드만 저장한다.
+    원본 파일은 응답 전체를 보관하므로 다른 도로는 원본에서 재적재할 수 있다.
+    다른 수집원은 아직 저장 범위 규칙이 없어 그대로 둔다.
+    """
+    if source != "its":
+        return records
+    allowed = set(settings.its_store_road_names)
+    return [r for r in records if r.road_name in allowed]
 
 
 def _target_links(conn: sqlite3.Connection, now: datetime) -> set[str]:
@@ -65,6 +79,9 @@ def _collect(
         if not records:
             # resultCode=0이어도 읽을 레코드가 없으면 실패다. no_update는 "읽었지만 모두 이미 저장됨"만 뜻한다.
             return "failed", http_status, expected, 0, 0, NO_ITEMS_ERROR
+        records = _store_scope(records, adapter.name, settings)
+        if not records:
+            return "failed", http_status, expected, 0, 0, NO_STORE_ROAD_ERROR
         if raw_file is not None:
             records = [replace(r, raw_file=raw_file) for r in records]
         received_ids = {r.link_id for r in records}

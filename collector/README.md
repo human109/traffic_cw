@@ -33,6 +33,7 @@
 ## 주의
 
 - 수집 실패를 0이나 빈 레코드로 저장하지 않는다. 빈 `speed`는 NULL, 0은 `default_value` 플래그로 남긴다.
+- 저장 범위(C-02 v2): 원본 파일은 응답 전체를 보관하고, `traffic_observation`에는 `roadName`이 `settings.its_store_road_names`(기본 `창원대로`)인 item만 넣는다. 해당 도로 item이 0개면 `failed`("저장 대상 도로 item 없음").
 - `resultCode=0`이어도 읽을 수 있는 item이 하나도 없으면 `failed`("응답에 읽을 수 있는 item 없음")다.
 - 속도가 `NaN`이면 `out_of_range` 플래그를 붙이지만, sqlite는 REAL NaN을 NULL로 저장한다. 즉 DB에서는 `speed IS NULL`, `quality_flag='out_of_range'`로 보인다.
 - 수집 중 예외가 나면 `run_once`는 호출자가 넘긴 연결도 rollback한다.

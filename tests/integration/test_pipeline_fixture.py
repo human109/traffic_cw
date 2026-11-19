@@ -13,7 +13,7 @@ from collector import run_once
 from collector.base import FetchResult
 from collector.its import ItsAdapter
 from common.timeutil import KST
-from config.settings import get_settings
+from config.settings import Settings
 from dashboard.data import current_table
 
 preprocessing = pytest.importorskip("preprocessing")
@@ -35,7 +35,10 @@ class _FixtureAdapter(ItsAdapter):
 
 
 def test_fixture_end_to_end(fixture_conn: sqlite3.Connection, its_sample_xml: bytes, tmp_path: Path) -> None:
-    settings = dataclasses.replace(get_settings(), its_api_key="dummy", raw_dir=str(tmp_path / "raw"))
+    # .env를 읽지 않도록 Settings()를 직접 만든다. 합성 응답의 roadName은 "합성도로"다 (C-02 v2 저장 범위).
+    settings = dataclasses.replace(
+        Settings(), its_api_key="dummy", raw_dir=str(tmp_path / "raw"), its_store_road_names=("합성도로",)
+    )
     fixture_conn.execute("DELETE FROM traffic_observation")
     fixture_conn.commit()
 
