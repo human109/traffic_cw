@@ -11,7 +11,7 @@ from datetime import datetime
 import pytest
 
 from common.timeutil import KST, to_iso
-from prediction import backfill_actuals, predict_latest
+from prediction import backfill_actuals, evaluate, predict_latest
 from prediction.baseline import PERSISTENCE_VERSION
 
 
@@ -37,8 +37,11 @@ def _insert_bin(
 
 
 def _rows(conn: sqlite3.Connection, segment_id: str) -> list[sqlite3.Row]:
+    # Slice 1부터 predict_latest가 기준 모델 3종을 함께 저장한다(C-04). 이 파일은 persistence만 본다.
     return conn.execute(
-        "SELECT * FROM traffic_prediction WHERE segment_id = ? ORDER BY horizon", (segment_id,)
+        "SELECT * FROM traffic_prediction WHERE segment_id = ? AND model_version = ?"
+        " ORDER BY horizon",
+        (segment_id, PERSISTENCE_VERSION),
     ).fetchall()
 
 
@@ -69,15 +72,20 @@ def test_four_horizons(fixture_conn: sqlite3.Connection) -> None:
 def test_registry_row(fixture_conn: sqlite3.Connection) -> None:
     predict_latest(_t(7, 6), conn=fixture_conn)
     predict_latest(_t(7, 7), conn=fixture_conn)
-    rows = fixture_conn.execute("SELECT * FROM model_registry").fetchall()
-    assert len(rows) == 1
-    r = rows[0]
-    assert r["model_version"] == PERSISTENCE_VERSION == "baseline_persistence"
-    assert r["model_type"] == "baseline_persistence"
-    assert r["target_var"] == "speed"
-    assert r["horizon"] == 0
-    assert r["is_active"] == 1
-    assert r["trained_at"] == to_iso(_t(7, 6))
+    rows = {r["model_version"]: r for r in fixture_conn.execute("SELECT * FROM model_registry")}
+    # 기준 모델 3종이 모두 등록된다 (C-04)
+    assert set(rows) == {
+        PERSISTENCE_VERSION,
+        "baseline_recent15",
+        "baseline_dow_mean",
+    }
+    for r in rows.values():
+        assert r["target_var"] == "speed"
+        assert r["horizon"] == 0
+        assert r["is_active"] == 1
+        assert r["trained_at"] == to_iso(_t(7, 6))
+    assert rows[PERSISTENCE_VERSION]["model_version"] == PERSISTENCE_VERSION == "baseline_persistence"
+    assert rows[PERSISTENCE_VERSION]["model_type"] == "baseline_persistence"
 
 
 def test_non_target_segment_ignored(fixture_conn: sqlite3.Connection) -> None:
@@ -144,7 +152,8 @@ def test_backfill(fixture_conn: sqlite3.Connection) -> None:
     _insert_bin(fixture_conn, "S1", _t(7, 10), _t(7, 15, 40), 40.0)
 
     n = backfill_actuals(_t(7, 16), conn=fixture_conn)
-    assert n == 1
+    # target 07:10인 예측 3모델분(persistence는 값, 나머지 2종은 skipped라도 실제값은 채운다)
+    assert n == 3
 
     by_h = {r["horizon"]: r for r in _rows(fixture_conn, "S1")}
     assert by_h[10]["actual_value"] == 40.0
@@ -191,8 +200,8 @@ def test_rerun_no_duplicate(fixture_conn: sqlite3.Connection) -> None:
     count1 = fixture_conn.execute("SELECT COUNT(*) FROM traffic_prediction").fetchone()[0]
     second = predict_latest(_t(7, 6), conn=fixture_conn)
     count2 = fixture_conn.execute("SELECT COUNT(*) FROM traffic_prediction").fetchone()[0]
-    assert count1 == count2 == 12  # 대상 구간 3개 x horizon 4개
-    assert first == 12
+    assert count1 == count2 == 36  # 대상 구간 3개 x horizon 4개 x 기준 모델 3종
+    assert first == 36
     assert second == 0
 
 
@@ -201,3 +210,5 @@ def test_naive_rejected(fixture_conn: sqlite3.Connection) -> None:
         predict_latest(datetime(2026, 11, 16, 7, 6), conn=fixture_conn)
     with pytest.raises(ValueError):
         backfill_actuals(datetime(2026, 11, 16, 7, 16), conn=fixture_conn)
+    with pytest.raises(ValueError):
+        evaluate(datetime(2026, 11, 23, 10, 0), conn=fixture_conn)

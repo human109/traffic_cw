@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 상태 | frozen |
-| 버전 | v1 |
+| 버전 | v1.1 |
 | 영향 받는 에이전트 | dev-ml, dev-dashboard, (Phase 2) dev-publisher |
 | 계약 테스트 | `tests/prediction/`, `tests/integration/` |
 
@@ -38,7 +38,7 @@
   - `congested`: `grade(actual) == "jam"`
   - `congestion_onset`: 같은 구간 `target_time − 15분` bin의 실제 speed가 있고, `actual ≤ 그 값 × (1 − congestion_onset_drop)`
 - 지표: `mae`, `rmse`, `wape = Σ|pred − actual| / Σ|actual|`(분모 0이면 NULL), `grade_accuracy = grade(pred) == grade(actual)` 비율(`common.grades.grade`).
-- `eval_type='live'`, `period_start`·`period_end`는 to_iso, `evaluated_at = to_iso(now)`. 같은 (model_version, eval_type, period_end, segment_id, regime) 행이 있으면 교체한다.
+- `eval_type='live'`, `period_start`·`period_end`는 to_iso, `evaluated_at = to_iso(now)`. 같은 (model_version, eval_type, period_end의 **날짜**, segment_id, regime) 행이 있으면 교체한다(v1.1: 하루에 여러 번 실행해도 날짜당 1벌만 남긴다).
 - 표본이 0인 조합은 행을 만들지 않는다.
 
 ## 불변 조건
@@ -50,4 +50,5 @@
 
 | 버전 | 일자 | 변경 | CR 출처 |
 |---|---|---|---|
+| v1.1 | 2026-11-19 | 평가 교체 키를 period_end 날짜 기준으로 명시. dow_mean 표본은 `bin_time ≤ base_time` | Task 4 구현·리뷰 |
 | v1 | 2026-11-19 | 기준 모델 3종, backfill 규칙, 평가 행 정의 | Slice 1 계획, Slice 0 리뷰 |
