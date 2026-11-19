@@ -60,6 +60,7 @@
 | 실측 | `partial` 원인: 부모 링크가 체인에 없는 4140068801(S3 본선)·4150149001(S6 측도) — ITS 응답에서 대응 링크 확인 |
 | 방향 검증 | 4140071400(S3)의 ITS 끝 교차로(41400574)가 2026 노드링크(41402077)와 다름 — 링크 경계 변경으로 추정, ITS 쪽 후속 링크 확인해 매핑 보정 |
 | 방향 검증 | 평일 07:30~08:30 데이터로 우리 방향(팔용→성산)과 반대 방향(ID −100) 속도 비교해 출근 방향 정체를 실측 확인 |
+| D-COL-06 리뷰 | `prune_raw`: `raw_dir` 빈 문자열·공백 거부, 저장소 루트 기준 해석(connect와 통일) / 폴더별 try로 rmtree 실패 시 계속 / `--once --maintenance` 생략 동작 문서 / scheduler.py 끝 빈 줄 |
 | Slice 1 Task 6 리뷰 | `--once --evaluate`에서 파이프라인 실패 시 평가 생략 문서화 / 평가 시각 10:05를 settings로 |
 | 대시보드 | streamlit `use_container_width` 경고 → `width='stretch'` |
 | Slice 1 Task 4 리뷰 | dow_mean 조회에 하한 없음(데이터 축적에 비례), 세그먼트당 1회 쿼리로 묶기 / `traffic_prediction(target_time)` 인덱스(C-01 CR) / calendar 누락 경고 날짜별 1회 / recent15 근거에 imputed 섞일 때 degraded 테스트 |

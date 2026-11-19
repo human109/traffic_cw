@@ -31,8 +31,8 @@
 | `base.py` | `FetchResult`, `SourceAdapter` 프로토콜 — 수집원을 추가할 때 구현할 인터페이스 |
 | `its.py` | ITS 요청 파라미터, tenacity 재시도, XML 파싱, `quality_flag` 판정, 키 가리기 |
 | `store.py` | 원본 파일·관측·로그 저장 (commit하지 않음) |
-| `maintenance.py` | 저장 범위 밖 관측 행 정리. `python -m collector.maintenance purge --raw <gz>`(dry-run), `--apply`로 삭제+VACUUM. 백업 후 실행 |
-| `scheduler.py` | 파이프라인 collect → preprocess → backfill → predict. `python -m collector.scheduler --once`로 1회, 인자 없이 상주(매 5분 30초, KST). 예정 시각보다 `scheduler_misfire_grace_s`(60초) 넘게 늦으면 그 회차는 건너뛴다. `--evaluate`로 평가(`prediction.evaluate`) 1회 실행. 상주 시 두 번째 job으로 매일 10:05:00 KST에 최근 7일 평가 |
+| `maintenance.py` | 정비 도구 2가지. `purge --raw <gz>`: 저장 범위 밖 관측 행 정리(dry-run 기본, `--apply`로 삭제+VACUUM, 백업 후 실행). `prune-raw`: `raw_keep_days`(기본 30일)보다 오래된 원본 날짜 폴더 정리(dry-run 기본, `--apply`로 삭제). 날짜가 아닌 폴더·오늘·어제는 항상 보존 |
+| `scheduler.py` | 파이프라인 collect → preprocess → backfill → predict. `python -m collector.scheduler --once`로 1회, 인자 없이 상주(매 5분 30초, KST). 예정 시각보다 `scheduler_misfire_grace_s`(60초) 넘게 늦으면 그 회차는 건너뛴다. `--evaluate`로 평가 1회, `--maintenance`로 운영 작업 1회 실행. 상주 시 job 3개: 파이프라인, 평가(매일 `eval_cron_hour:eval_cron_minute`, 기본 10:05), 운영(매일 `backup_cron_hour`시, 기본 03:00 — DB 백업 후 원본 정리). `--once --evaluate` 조합에서 파이프라인에 실패 단계가 있으면 평가는 건너뛰어진다 |
 
 ## 주의
 

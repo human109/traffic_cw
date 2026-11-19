@@ -10,11 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from collector.maintenance import purge_outside_scope, store_scope_link_ids
+from collector import maintenance
+from collector.maintenance import prune_raw, purge_outside_scope, store_scope_link_ids
 from common.timeutil import KST
 from config.settings import Settings
 
 NOW = datetime(2026, 11, 19, 11, 0, tzinfo=KST)
+PRUNE_NOW = datetime(2026, 11, 20, 3, 0, tzinfo=KST)
 SYN_ROAD = "합성도로"
 SETTINGS = replace(Settings(), its_store_road_names=(SYN_ROAD,))
 
@@ -133,3 +135,92 @@ def test_failure_rolls_back(fixture_conn: sqlite3.Connection, monkeypatch: pytes
 def test_naive_now_rejected(fixture_conn: sqlite3.Connection) -> None:
     with pytest.raises(ValueError):
         purge_outside_scope(fixture_conn, {"SYN0000001"}, now=datetime(2026, 11, 19, 11, 0))
+
+
+# --- prune_raw (D-COL-06) ---
+
+
+def _prune_settings(tmp_path: Path, keep_days: int) -> Settings:
+    return replace(Settings(), raw_dir=str(tmp_path / "raw"), raw_keep_days=keep_days)
+
+
+def _make_raw(raw_dir: Path, sources: dict[str, dict[str, int]]) -> Path:
+    """synthetic: {source: {폴더이름: 파일 수}} 구조로 raw 디렉터리를 만든다."""
+    for source, sub in sources.items():
+        for name, n_files in sub.items():
+            d = raw_dir / source / name
+            d.mkdir(parents=True, exist_ok=True)
+            for i in range(n_files):
+                (d / f"{i:06d}.xml.gz").write_bytes(b"<x/>")
+    return raw_dir
+
+
+def test_prune_raw_deletes_only_older_than_keep_days(tmp_path: Path) -> None:
+    raw = _make_raw(
+        tmp_path / "raw",
+        {"its": {"20261020": 2, "20261021": 1, "20261110": 3}, "other": {"20261001": 4}},
+    )
+    # keep_days=30, now=2026-11-20 → 기준일 2026-10-21. "이전"만 삭제 (경계일 20261021은 보존).
+    n = prune_raw(PRUNE_NOW, _prune_settings(tmp_path, 30), dry_run=False)
+    assert n == 2 + 4  # 20261020(2개) + other/20261001(4개)
+    assert not (raw / "its" / "20261020").exists()
+    assert not (raw / "other" / "20261001").exists()
+    assert (raw / "its" / "20261021").is_dir()  # 기준일 당일은 보존
+    assert (raw / "its" / "20261110").is_dir()
+
+
+def test_prune_raw_keeps_non_date_folders(tmp_path: Path) -> None:
+    raw = _make_raw(
+        tmp_path / "raw",
+        {"its": {"notadate": 1, "20261399": 1, "2026101": 1, "20260101": 2}},
+    )
+    (raw / "its" / "loose.xml.gz").write_bytes(b"<x/>")  # 날짜 폴더 밖 파일
+    n = prune_raw(PRUNE_NOW, _prune_settings(tmp_path, 30), dry_run=False)
+    assert n == 2  # 20260101만 대상
+    for name in ("notadate", "20261399", "2026101"):
+        assert (raw / "its" / name).is_dir()  # 8자리 날짜가 아니거나 실제 날짜가 아니면 건드리지 않는다
+    assert (raw / "its" / "loose.xml.gz").exists()
+
+
+def test_prune_raw_always_keeps_today_and_yesterday(tmp_path: Path) -> None:
+    raw = _make_raw(
+        tmp_path / "raw",
+        {"its": {"20261120": 1, "20261119": 1, "20261118": 1}},
+    )
+    # keep_days=0이면 기준일이 오늘이지만, 오늘·어제는 설정과 무관하게 보존한다(안전장치).
+    n = prune_raw(PRUNE_NOW, _prune_settings(tmp_path, 0), dry_run=False)
+    assert n == 1  # 20261118(그저께)만 삭제
+    assert (raw / "its" / "20261120").is_dir()
+    assert (raw / "its" / "20261119").is_dir()
+    assert not (raw / "its" / "20261118").exists()
+
+
+def test_prune_raw_dry_run_deletes_nothing(tmp_path: Path) -> None:
+    raw = _make_raw(tmp_path / "raw", {"its": {"20260101": 3, "20261110": 1}})
+    n = prune_raw(PRUNE_NOW, _prune_settings(tmp_path, 30))  # 기본 dry-run
+    assert n == 3  # 지울 파일 수만 센다
+    assert (raw / "its" / "20260101").is_dir()
+    assert len(list((raw / "its" / "20260101").iterdir())) == 3
+
+
+def test_prune_raw_missing_dir_returns_zero(tmp_path: Path) -> None:
+    assert prune_raw(PRUNE_NOW, _prune_settings(tmp_path, 30)) == 0
+
+
+def test_prune_raw_naive_now_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        prune_raw(datetime(2026, 11, 20, 3, 0), _prune_settings(tmp_path, 30))
+
+
+def test_prune_raw_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    raw = _make_raw(tmp_path / "raw", {"its": {"20260101": 2, "20261110": 1}})
+    monkeypatch.setattr("config.settings.get_settings", lambda: _prune_settings(tmp_path, 30))
+    monkeypatch.setattr(maintenance, "now_kst", lambda: PRUNE_NOW)  # CLI는 내부에서 now_kst()를 쓴다
+
+    assert maintenance.main(["prune-raw"]) == 0  # 기본 dry-run
+    assert "2" in capsys.readouterr().out
+    assert (raw / "its" / "20260101").is_dir()
+
+    assert maintenance.main(["prune-raw", "--apply"]) == 0
+    assert not (raw / "its" / "20260101").exists()
+    assert (raw / "its" / "20261110").is_dir()

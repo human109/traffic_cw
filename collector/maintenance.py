@@ -1,16 +1,20 @@
-"""`traffic_observation` 정비 도구 (D-COL-05). 실행: `python -m collector.maintenance purge --raw <gz> [--apply]`.
+"""수집기 정비 도구 (D-COL-05, D-COL-06). 실행:
+`python -m collector.maintenance purge --raw <gz> [--apply]` · `python -m collector.maintenance prune-raw [--apply]`.
 
-C-02 v2 저장 범위(창원대로) 이전에 쌓인 범위 밖 행을 정리한다. `traffic_observation` 외의 테이블은 건드리지 않는다.
-기본은 dry-run(숫자만 출력)이고 `--apply`일 때만 삭제 후 VACUUM한다. 실행 전에 DB를 백업한다.
+`purge`: C-02 v2 저장 범위(창원대로) 이전에 쌓인 범위 밖 관측 행을 정리한다. `traffic_observation` 외의
+테이블은 건드리지 않는다. 기본은 dry-run(숫자만 출력)이고 `--apply`일 때만 삭제 후 VACUUM한다.
+`prune-raw`: `raw_keep_days`보다 오래된 원본 날짜 폴더를 정리한다(C-06 v2.2). 기본 dry-run, `--apply`로 삭제.
 """
 
 from __future__ import annotations
 
 import argparse
 import gzip
+import re
+import shutil
 import sqlite3
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from collector.runner import _target_links
@@ -21,6 +25,7 @@ from config.settings import Settings
 log = get_logger(__name__)
 
 _KEEP_TABLE = "temp._purge_keep"
+_DATE_DIR_RE = re.compile(r"\d{8}")
 
 
 def store_scope_link_ids(raw_file: Path, settings: Settings) -> set[str]:
@@ -90,19 +95,77 @@ def purge_outside_scope(
     return stats
 
 
+def prune_raw(now: datetime, settings: Settings | None = None, *, dry_run: bool = True) -> int:
+    """`raw_dir/<source>/<YYYYMMDD>/` 날짜 폴더 중 `raw_keep_days`보다 오래된 것을 지운다 (C-06 v2.2).
+
+    - 폴더 이름이 8자리 날짜(YYYYMMDD)가 아니거나 실제 날짜로 읽히지 않으면 건드리지 않는다.
+    - 오늘·어제 날짜 폴더는 `raw_keep_days`와 무관하게 보존한다(설정 실수 방지 안전장치).
+    - `dry_run=True`(기본)이면 아무것도 지우지 않고 지울 파일 수만 센다.
+    - 반환: 지우거나(apply) 지울(dry-run) 파일 수.
+    `now`가 timezone 정보 없는 datetime이면 `ValueError`를 낸다.
+    """
+    require_aware(now)
+    if settings is None:
+        from config.settings import get_settings
+
+        settings = get_settings()
+    cutoff = (now - timedelta(days=settings.raw_keep_days)).date()
+    floor = (now - timedelta(days=1)).date()  # 어제 이후는 설정과 무관하게 보존한다
+    raw_dir = Path(settings.raw_dir)
+    mode = "dry-run" if dry_run else "apply"
+    if not raw_dir.is_dir():
+        log.info("prune-raw %s: raw_dir이 없다: %s", mode, raw_dir)
+        return 0
+
+    files = 0
+    folders = 0
+    for source_dir in sorted(p for p in raw_dir.iterdir() if p.is_dir()):
+        for date_dir in sorted(p for p in source_dir.iterdir() if p.is_dir()):
+            if _DATE_DIR_RE.fullmatch(date_dir.name) is None:
+                continue  # 날짜 폴더가 아니면 건드리지 않는다
+            try:
+                d = datetime.strptime(date_dir.name, "%Y%m%d").date()
+            except ValueError:
+                continue  # 8자리지만 실제 날짜가 아니면 건드리지 않는다
+            if not (d < cutoff and d < floor):
+                continue
+            n = sum(1 for f in date_dir.rglob("*") if f.is_file())
+            files += n
+            folders += 1
+            if dry_run:
+                log.info("prune-raw dry-run: 삭제 예정 %s (파일 %d개)", date_dir, n)
+            else:
+                shutil.rmtree(date_dir)
+                log.info("prune-raw: 삭제 %s (파일 %d개)", date_dir, n)
+    log.info(
+        "prune-raw %s: 폴더 %d개, 파일 %d개 (기준 %s 이전, %s 이후 보존)",
+        mode, folders, files, cutoff, floor,
+    )
+    return files
+
+
 def main(argv: list[str] | None = None) -> int:
-    """`purge --raw <gz> [--apply]`. 기본은 dry-run으로 숫자만 출력한다."""
-    parser = argparse.ArgumentParser(prog="python -m collector.maintenance", description="traffic_observation 정비")
+    """`purge --raw <gz> [--apply]` · `prune-raw [--apply]`. 기본은 dry-run으로 숫자만 출력한다."""
+    parser = argparse.ArgumentParser(prog="python -m collector.maintenance", description="수집기 정비 도구")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("purge", help="저장 범위 밖 관측 행 정리")
     p.add_argument("--raw", type=Path, required=True, help="저장 범위 링크를 뽑을 ITS 원본 .xml.gz")
     p.add_argument("--apply", action="store_true", help="실제로 삭제하고 VACUUM한다(없으면 dry-run)")
+    pr = sub.add_parser("prune-raw", help="오래된 원본 날짜 폴더 정리 (raw_keep_days)")
+    pr.add_argument("--apply", action="store_true", help="실제로 삭제한다(없으면 dry-run)")
     args = parser.parse_args(argv)
 
     from config.settings import get_settings
-    from database.db import connect  # C-06
 
     settings = get_settings()
+
+    if args.command == "prune-raw":
+        files = prune_raw(now_kst(), settings, dry_run=not args.apply)
+        print(f"{'적용' if args.apply else 'dry-run'}: 파일 {files}개")
+        return 0
+
+    from database.db import connect  # C-06
+
     keep_ids = store_scope_link_ids(args.raw, settings)
     print(f"저장 범위 링크(원본 기준): {len(keep_ids)}개 {settings.its_store_road_names}")
     conn = connect()

@@ -76,6 +76,7 @@ class Settings:
     # 수집 성공률 (BOARD 정의): 평일·비공휴일 이 시간대의 5분 bin × 예측 대상 구간 중 실제 값이 있는 비율
     rate_window: tuple[str, str] = ("06:00", "10:00")  # bin_time 기준, 시작 포함·끝 제외
     rate_target: float = 0.95
+    rate_streak_days: int = 3  # Slice 0 완료 = 연속 service day 이만큼 rate_target 이상
 
     collect_cron_minute: str = "*/5"
     # 예정 시각에서 이만큼 늦어도 그 회차를 실행한다. 절전 등으로 더 늦으면 건너뛰고 다음 회차부터 실행한다.

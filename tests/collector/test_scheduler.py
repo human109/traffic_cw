@@ -181,6 +181,53 @@ def test_main_evaluate_failure_exit_code(
     assert FAKE_KEY not in caplog.text
 
 
+def test_main_maintenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    seen: list[datetime] = []
+    monkeypatch.setattr(scheduler, "_backup_once", lambda now: seen.append(now) or calls.append("backup"))
+    monkeypatch.setattr(scheduler, "_prune_once", lambda now: seen.append(now) or calls.append("prune_raw"))
+    assert main(["--maintenance"]) == 0
+    assert calls == ["backup", "prune_raw"]  # 백업 → 원본 정리 순서로 1회 실행
+    assert len(seen) == 2 and all(n.utcoffset() == KST.utcoffset(None) for n in seen)
+
+
+def test_main_maintenance_failure_exit_code(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    calls: list[str] = []
+
+    def boom(now: datetime) -> object:
+        calls.append("backup")
+        raise RuntimeError(f"synthetic maintenance failure {FAKE_KEY}")
+
+    monkeypatch.setattr(scheduler, "_backup_once", boom)
+    monkeypatch.setattr(scheduler, "_prune_once", lambda now: calls.append("prune_raw"))
+    assert main(["--maintenance"]) == 1
+    assert calls == ["backup", "prune_raw"]  # 실패해도 다음 단계는 실행됐다
+    assert "RuntimeError" in caplog.text
+    assert FAKE_KEY not in caplog.text
+
+
+def test_main_once_evaluate_skips_evaluation_when_pipeline_fails(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    evaluate_calls: list[datetime] = []
+    monkeypatch.setattr(
+        scheduler, "run_pipeline", lambda now, steps=None: {"collect": "error: failed", "predict": "ok"}
+    )
+    monkeypatch.setattr(scheduler, "_evaluate_once", lambda now: evaluate_calls.append(now) or 1)
+    assert main(["--once", "--evaluate"]) == 1
+    assert evaluate_calls == []  # 파이프라인이 실패하면 평가는 건너뛴다 (리뷰 Minor)
+
+
+def test_main_once_evaluate_runs_both_when_pipeline_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    evaluate_calls: list[datetime] = []
+    monkeypatch.setattr(scheduler, "run_pipeline", lambda now, steps=None: {name: "ok" for name in ORDER})
+    monkeypatch.setattr(scheduler, "_evaluate_once", lambda now: evaluate_calls.append(now) or 1)
+    assert main(["--once", "--evaluate"]) == 0
+    assert len(evaluate_calls) == 1
+
+
 def test_naive_now_rejected() -> None:
     calls: list[tuple[str, datetime]] = []
     with pytest.raises(ValueError):
@@ -207,10 +254,11 @@ def test_default_steps_use_entrypoints() -> None:
 
 
 def test_build_scheduler_jobs() -> None:
-    settings = Settings(collect_cron_minute="*/5")
+    # 기본이 아닌 값으로 만들어 trigger가 settings를 따르는지 본다.
+    settings = Settings(collect_cron_minute="*/5", eval_cron_hour=9, eval_cron_minute=55, backup_cron_hour=4)
     sched = build_scheduler(settings)
     jobs = {job.id: job for job in sched.get_jobs()}
-    assert set(jobs) == {"pipeline", "evaluate"}  # job 2개
+    assert set(jobs) == {"pipeline", "evaluate", "maintenance"}  # job 3개
 
     pipeline = jobs["pipeline"]
     fields = {f.name: str(f) for f in pipeline.trigger.fields}
@@ -223,14 +271,90 @@ def test_build_scheduler_jobs() -> None:
 
     evaluate = jobs["evaluate"]
     fields = {f.name: str(f) for f in evaluate.trigger.fields}
-    assert fields["hour"] == "10"
-    assert fields["minute"] == "5"
+    assert fields["hour"] == "9"  # settings.eval_cron_hour
+    assert fields["minute"] == "55"  # settings.eval_cron_minute
     assert fields["second"] == "0"
     assert evaluate.trigger.timezone.utcoffset(None) == KST.utcoffset(None)
     assert evaluate.max_instances == 1
     assert evaluate.coalesce is True
     assert evaluate.misfire_grace_time == settings.scheduler_misfire_grace_s
     assert evaluate.func is scheduler._scheduled_evaluate_job
+
+    maintenance = jobs["maintenance"]
+    fields = {f.name: str(f) for f in maintenance.trigger.fields}
+    assert fields["hour"] == "4"  # settings.backup_cron_hour
+    assert fields["minute"] == "0"
+    assert fields["second"] == "0"
+    assert maintenance.trigger.timezone.utcoffset(None) == KST.utcoffset(None)
+    assert maintenance.max_instances == 1
+    assert maintenance.coalesce is True
+    assert maintenance.misfire_grace_time == settings.scheduler_misfire_grace_s
+    assert maintenance.func is scheduler._scheduled_maintenance_job
+
+
+def test_run_maintenance_runs_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(scheduler, "_backup_once", lambda now: calls.append("backup") or NOW)
+    monkeypatch.setattr(scheduler, "_prune_once", lambda now: calls.append("prune_raw") or 7)
+    results = scheduler.run_maintenance(NOW)
+    assert calls == ["backup", "prune_raw"]  # 백업 → 원본 정리 순서
+    assert results == {"backup": "ok", "prune_raw": "ok"}
+
+
+def test_run_maintenance_isolates_failures(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    calls: list[str] = []
+
+    def boom(now: datetime) -> object:
+        calls.append("backup")
+        raise RuntimeError(f"synthetic backup failure {FAKE_KEY}")
+
+    monkeypatch.setattr(scheduler, "_backup_once", boom)
+    monkeypatch.setattr(scheduler, "_prune_once", lambda now: calls.append("prune_raw") or 3)
+    results = scheduler.run_maintenance(NOW)
+    assert calls == ["backup", "prune_raw"]  # 백업이 실패해도 원본 정리는 실행한다
+    assert results == {"backup": "error: RuntimeError", "prune_raw": "ok"}
+    assert "RuntimeError" in caplog.text
+    assert FAKE_KEY not in caplog.text  # 키 가리기
+
+
+def test_run_maintenance_naive_now_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(scheduler, "_backup_once", lambda now: calls.append("backup"))
+    monkeypatch.setattr(scheduler, "_prune_once", lambda now: calls.append("prune_raw"))
+    with pytest.raises(ValueError):
+        scheduler.run_maintenance(datetime(2026, 11, 20, 11, 0))
+    assert calls == []  # 어떤 단계도 실행하지 않는다
+
+
+def test_scheduled_maintenance_job_swallows_errors(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def boom(now: datetime) -> object:
+        raise RuntimeError(f"synthetic maintenance failure {FAKE_KEY}")
+
+    monkeypatch.setattr(scheduler, "run_maintenance", boom)
+    assert scheduler._scheduled_maintenance_job() is None  # 예외 없이 정상 반환
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors
+    assert "RuntimeError" in caplog.text
+    assert FAKE_KEY not in caplog.text
+
+
+def test_backup_once_calls_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    backup_mod = pytest.importorskip("scripts.backup_db")  # dev-data 모듈. 없으면 이 테스트는 건너뛴다.
+    seen: list[datetime] = []
+    monkeypatch.setattr(backup_mod, "backup", lambda now, conn=None: seen.append(now) or NOW)
+    assert scheduler._backup_once(NOW) == NOW
+    assert seen == [NOW]
+
+
+def test_prune_once_applies_deletion(monkeypatch: pytest.MonkeyPatch) -> None:
+    from collector import maintenance
+
+    seen: list[tuple[datetime, bool]] = []
+    monkeypatch.setattr(maintenance, "prune_raw", lambda now, settings=None, dry_run=True: seen.append((now, dry_run)) or 5)
+    assert scheduler._prune_once(NOW) == 5
+    assert seen == [(NOW, False)]  # 스케줄러 운영 job은 실제 삭제(apply)로 실행한다
 
 
 def test_main_once(monkeypatch: pytest.MonkeyPatch) -> None:
