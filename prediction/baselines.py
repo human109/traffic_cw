@@ -1,11 +1,13 @@
-"""기준 모델 recent15·dow_mean (C-04 v1, SPEC 8.2).
+"""기준 모델 recent15·dow_mean (C-04 v1.3, SPEC 8.2).
 
 - `baseline_recent15`: 최신 사용 가능 bin을 포함한 직전 `recent_mean_minutes`(15분 = 3 bin) 중
   speed가 있는 값의 평균. 그런 값이 2개 미만이면 skipped.
 - `baseline_dow_mean`: `available_at ≤ now`인 과거 데이터에서 `target_time`과 같은 요일·같은
   HH:MM bin의 speed 평균(imputed 제외). 서로 다른 주가 `dow_mean_min_weeks`(3) 미만이면 skipped.
   dow_mean의 입력 품질은 근거 bin이 아니라 표본 수로 판단하며, 조건을 충족하면 `ok`다.
-  조회는 `DOW_MEAN_LOOKBACK_WEEKS`주 이전까지다(더 오래된 과거는 쓰지 않는다).
+  조회는 `settings.dow_mean_lookback_weeks`주 이전까지다(더 오래된 과거는 쓰지 않는다).
+  target 시각을 HH:MM 문자열로 묶어 표본을 모으므로, horizon 간 차이가 24시간 미만이어야
+  한다(그 밖이면 ValueError — `predict_dow_mean`).
 
 두 모델 모두 persistence와 같은 base_time으로 저장되며, 미래 정보는 쓰지 않는다
 (AGENTS.md 6장 3).
@@ -27,10 +29,6 @@ from prediction.baseline import (
 )
 
 log = get_logger(__name__)
-
-# dow_mean 표본 조회 하한(주). C-04에는 조회 하한이 없어 모듈 상수로 둔다.
-# settings로 옮기는 것이 후보다(D-ML-02 보고).
-DOW_MEAN_LOOKBACK_WEEKS = 8
 
 
 def _recent_values(
@@ -93,19 +91,22 @@ def _dow_stats_by_hhmm(
     segment_id: str,
     now: datetime,
     base_time: datetime,
+    settings: Settings,
     targets: dict[int, datetime],
 ) -> dict[str, tuple[float | None, int]]:
     """target 시각(HH:MM)별 (과거 같은 요일 값의 평균, 값이 있는 서로 다른 날짜 수).
 
     horizon마다 이력을 다시 읽지 않고 세그먼트당 1회 조회로 모든 target HH:MM을 함께
-    가져온다. 조회 범위는 `base_time − DOW_MEAN_LOOKBACK_WEEKS`주 이상 `base_time` 이하다.
-    imputed bin(보정값)은 제외한다. "서로 다른 주"는 같은 요일·같은 HH:MM 값이 있는
+    가져온다. 가정: 서로 다른 horizon의 target은 같은 HH:MM을 공유하지 않는다(horizon 간
+    차이 < 24시간 — `predict_dow_mean`이 검증한다). 조회 범위는
+    `base_time − settings.dow_mean_lookback_weeks`주 이상(경계 포함, C-04 v1.3) `base_time`
+    이하다. imputed bin(보정값)은 제외한다. "서로 다른 주"는 같은 요일·같은 HH:MM 값이 있는
     서로 다른 날짜 수로 센다. 같은 날의 미래 bin은 `bin_time ≤ base_time < target`이라
     자연히 제외된다(미래 정보 금지).
     """
     if not targets:
         return {}
-    lower_bound = base_time - timedelta(weeks=DOW_MEAN_LOOKBACK_WEEKS)
+    lower_bound = base_time - timedelta(weeks=settings.dow_mean_lookback_weeks)
     hhmm_targets = {target.strftime("%H:%M"): target for target in targets.values()}
     placeholders = ",".join("?" * len(hhmm_targets))
     rows = conn.execute(
@@ -143,10 +144,20 @@ def predict_dow_mean(
 ) -> int:
     """과거 동일 요일·시간대 평균 기준 모델로 horizon별 예측을 저장한다. 저장한 행 수를 돌려준다.
 
-    표본 조회는 세그먼트당 1회다(세그먼트 이력을 horizon마다 다시 읽지 않는다).
+    표본 조회는 세그먼트당 1회다(세그먼트 이력을 horizon마다 다시 읽지 않는다). target
+    시각을 HH:MM 문자열로 묶어 조회하므로 horizon 간 차이가 24시간 미만이어야 한다 —
+    어기면(같은 HH:MM이 24시간 이상 차이 나면 서로 다른 요일 target이 한 묶음에 섞인다)
+    ValueError를 낸다.
     """
-    targets = {h: base_time + timedelta(minutes=h) for h in settings.horizons}
-    stats = _dow_stats_by_hhmm(conn, segment_id, now, base_time, targets)
+    horizons = settings.horizons
+    targets = {h: base_time + timedelta(minutes=h) for h in horizons}
+    hhmm_list = [target.strftime("%H:%M") for target in targets.values()]
+    if len(set(hhmm_list)) != len(horizons):
+        raise ValueError(
+            "dow_mean은 target 시각을 HH:MM으로 묶으므로 horizon 간 차이가 24시간 미만이어야 한다:"
+            f" horizons={horizons!r}"
+        )
+    stats = _dow_stats_by_hhmm(conn, segment_id, now, base_time, settings, targets)
     total = 0
     for h in settings.horizons:
         target = targets[h]

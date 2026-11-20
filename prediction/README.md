@@ -4,18 +4,21 @@
 지난 예측의 실제값을 채우고(`traffic_prediction.actual_value`) 성능을 `model_evaluation`에 기록한다.
 쓰기 소유 테이블: `traffic_prediction`, `model_registry`, `model_evaluation`.
 
-## 기준 모델 3종 (C-04 v1, SPEC 8.2)
+## 기준 모델 3종 (C-04 v1.3, SPEC 8.2)
 
 | model_version | 예측값 | skipped 조건 |
 |---|---|---|
 | `baseline_persistence` | 최신 사용 가능 bin의 speed | bin 없음, stale, speed NULL |
 | `baseline_recent15` | 최신 사용 가능 bin 포함 직전 15분(3 bin) 중 speed가 있는 값의 평균 | 그런 값이 2개 미만 |
-| `baseline_dow_mean` | `available_at ≤ now` 과거 데이터에서 target_time과 같은 요일·같은 HH:MM bin의 speed 평균(`imputed` 제외). 조회 하한은 `base_time − 8주`(`DOW_MEAN_LOOKBACK_WEEKS`) | 값이 있는 서로 다른 주가 3주(`dow_mean_min_weeks`) 미만 |
+| `baseline_dow_mean` | `available_at ≤ now` 과거 데이터에서 target_time과 같은 요일·같은 HH:MM bin의 speed 평균(`imputed` 제외). 조회 범위는 `base_time − dow_mean_lookback_weeks`(기본 8주, `config/settings.py`) 이상 `base_time` 이하(경계 포함) | 값이 있는 서로 다른 주가 3주(`dow_mean_min_weeks`) 미만 |
 
 - 세 모델 모두 `model_registry.horizon=0`, `target_var='speed'`, `is_active=1`이고, 같은 `base_time`으로 매 실행마다 함께 저장한다.
 - `base_time`은 `available_at ≤ now`이고 stale(10분)이 아닌 최신 bin. 없으면 `floor_5min(now) − 5분`.
 - 입력 품질 `input_quality`: 근거 bin flag가 `ok`면 `ok`, `partial`·`unweighted`·`imputed`면 `degraded`, 예측 불가면 `skipped`(predicted_value NULL). dow_mean은 표본 수로 판단한다(충족하면 `ok`).
 - skipped 행은 같은 키로 다시 예측할 때 덮어쓴다(늦게 도착한 bin으로 채움). `ok`·`degraded` 행은 덮어쓰지 않는다.
+- dow_mean은 target 시각을 HH:MM 문자열로 묶어 표본을 모으므로, `horizons` 설정의 차이가
+  24시간 미만이어야 한다(같은 HH:MM이 24시간 이상 차이 나면 서로 다른 요일 target이 한
+  묶음에 섞인다). 위반 시 `predict_latest`가 ValueError를 내고 저장 없이 중단된다.
 
 ## 실제값 갱신 (backfill)
 
@@ -48,7 +51,7 @@
 |---|---|
 | 공개 진입점 `predict_latest`, `backfill_actuals`, `evaluate` (C-06) | `prediction/__init__.py` |
 | 모델 버전 상수, registry 등록, 최신 bin 선택, 예측 행 저장(skipped 덮어쓰기), backfill | `prediction/baseline.py` |
-| recent15(최근 15분 평균), dow_mean(과거 동일 요일·시간대 평균, 표본 조회 하한 8주) | `prediction/baselines.py` |
+| recent15(최근 15분 평균), dow_mean(과거 동일 요일·시간대 평균, 표본 조회 하한 `dow_mean_lookback_weeks`) | `prediction/baselines.py` |
 | 평가(기간 필터, regime, 지표, `model_evaluation` 저장) | `prediction/evaluate.py` |
 | 테스트 | `tests/prediction/` (`test_persistence.py`, `test_baselines.py`, `test_evaluate.py`) |
 

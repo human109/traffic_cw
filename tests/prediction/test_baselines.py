@@ -6,10 +6,12 @@ synthetic: 모든 값은 테스트가 직접 넣는 합성 값이다. 여기서 
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 
 import pytest
 
 from common.timeutil import to_iso
+from config.settings import Settings
 from prediction import backfill_actuals, predict_latest
 from prediction.baseline import DOW_MEAN_VERSION, PERSISTENCE_VERSION, RECENT15_VERSION
 from tests.prediction.helpers import insert_bin, t
@@ -177,28 +179,59 @@ def test_dow_mean_value(fixture_conn: sqlite3.Connection) -> None:
         assert dow[h]["input_quality"] == "skipped"
 
 
-def test_dow_mean_lookback_8_weeks(fixture_conn: sqlite3.Connection) -> None:
-    # dow_mean 조회는 base_time − 8주를 하한으로 둔다. 경계(정확히 8주 전)는 포함.
-    # 모두 2026년 월요일: 09-07은 10주 전(제외), 09-21은 정확히 8주 전(포함).
-    for month, day, value in [
-        (9, 7, 200.0),
-        (9, 21, 60.0),
-        (10, 5, 30.0),
-        (10, 12, 40.0),
-        (11, 2, 50.0),
-    ]:
+def _with_settings(monkeypatch: pytest.MonkeyPatch, **changes: object) -> None:
+    """predict_latest가 쓰는 get_settings를 지정 값으로 바꾼다(C-06 시그니처에 settings 인자가 없다)."""
+    monkeypatch.setattr("prediction.get_settings", lambda: replace(Settings(), **changes))
+
+
+def test_dow_mean_lookback_follows_setting(
+    fixture_conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # dow_mean 조회 하한은 settings.dow_mean_lookback_weeks를 따른다 (C-04 v1.3). 3주로 줄인다.
+    _with_settings(monkeypatch, dow_mean_lookback_weeks=3)
+    # 모두 2026년 월요일 07:15. base_time − 3주 = 10-26 07:00 → 10-19(4주 전)는 하한 밖.
+    for month, day, value in [(10, 19, 200.0), (10, 26, 30.0), (11, 2, 40.0), (11, 9, 50.0)]:
         insert_bin(fixture_conn, "S1", t(day, 7, 15, month=month), value)
-    # S2: 하한 안 2주 + 하한 밖 1주 → 세 주로 세면 안 된다
-    for month, day, value in [(9, 14, 60.0), (10, 26, 40.0), (11, 9, 50.0)]:
+    # S2: 하한 안 2주(10-26, 11-09) + 하한 밖 1주(10-12) → 3주로 세면 안 된다
+    for month, day, value in [(10, 12, 60.0), (10, 26, 40.0), (11, 9, 50.0)]:
         insert_bin(fixture_conn, "S2", t(day, 7, 15, month=month), value)
 
     predict_latest(NOW, conn=fixture_conn)
     s1 = _preds(fixture_conn, DOW_MEAN_VERSION, "S1")
-    assert s1[15]["predicted_value"] == pytest.approx(45.0)  # (60+30+40+50)/4, 09-07 제외
+    assert s1[15]["predicted_value"] == pytest.approx(40.0)  # (30+40+50)/3, 10-19 제외
     assert s1[15]["input_quality"] == "ok"
     s2 = _preds(fixture_conn, DOW_MEAN_VERSION, "S2")
     assert s2[15]["predicted_value"] is None  # 하한 안 2주뿐 → skipped
     assert s2[15]["input_quality"] == "skipped"
+
+
+def test_dow_mean_boundary_inclusive(
+    fixture_conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 경계 bin(정확히 base_time − dow_mean_lookback_weeks주)은 포함된다(`>=`).
+    # 경계 순간의 HH:MM은 base_time과 같으므로, target과 HH:MM이 같아지는 horizon 0으로 검증한다.
+    _with_settings(monkeypatch, horizons=(0,))
+    # 모두 2026년 월요일 07:00: 09-14는 9주 전(제외), 09-21은 정확히 8주 전(경계, 포함).
+    for month, day, value in [(9, 14, 200.0), (9, 21, 60.0), (10, 5, 30.0), (10, 12, 40.0)]:
+        insert_bin(fixture_conn, "S1", t(day, 7, 0, month=month), value)
+
+    predict_latest(NOW, conn=fixture_conn)
+    s1 = _preds(fixture_conn, DOW_MEAN_VERSION, "S1")
+    assert s1[0]["predicted_value"] == pytest.approx(130.0 / 3.0)  # (60+30+40)/3, 경계 포함
+    assert s1[0]["input_quality"] == "ok"  # 경계가 빠지면 2주라 skipped가 된다
+
+
+def test_dow_mean_rejects_horizons_24h_apart(
+    fixture_conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # target을 HH:MM 문자열로 묶어 표본을 모으므로, horizon 간 차이가 24시간 이상이면
+    # (같은 HH:MM이 다른 요일 target이 되면) 오류로 막는다.
+    _with_settings(monkeypatch, horizons=(5, 5 + 24 * 60))
+
+    with pytest.raises(ValueError, match="24시간"):
+        predict_latest(NOW, conn=fixture_conn)
+    # 예외 시 rollback되어 저장된 행이 없어야 한다
+    assert fixture_conn.execute("SELECT COUNT(*) FROM traffic_prediction").fetchone()[0] == 0
 
 
 def test_skipped_overwritten_by_late_bin(fixture_conn: sqlite3.Connection) -> None:
