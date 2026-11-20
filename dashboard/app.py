@@ -26,12 +26,14 @@ from dashboard.data import (  # noqa: E402
     collection_rates,
     collection_status,
     current_table,
+    default_model_index,
     delay_minutes,
     evaluation_table,
     heatmap,
     latest_available_at,
     segment_delays,
     timeseries,
+    timeseries_status,
 )
 from dashboard.style import status_text_color  # noqa: E402
 
@@ -109,12 +111,14 @@ def render() -> None:
             if not models:
                 st.info("활성 모델이 없습니다.")
                 models = ["baseline_persistence"]
-            model_v = st.selectbox("모델", models, index=0)
+            default_idx = default_model_index(models)
+            model_v = st.selectbox("모델", models, index=default_idx)
             # 시간 범위 (간단하게 24시간 전~지금)
             start = now - timedelta(days=1)
             end = now
             df_ts = timeseries(conn, seg, start, end, int(horizon), model_v, now)
-            if df_ts.empty or df_ts.dropna(subset=["실제", "예측"]).empty:
+            status = timeseries_status(df_ts)
+            if status == "empty":
                 st.info("선택한 조건에 데이터가 없습니다.")
             else:
                 fig = go.Figure()
@@ -122,6 +126,10 @@ def render() -> None:
                 fig.add_trace(go.Scatter(x=df_ts["시각"], y=df_ts["예측"], name="예측", mode="lines+markers"))
                 fig.update_layout(xaxis_title="시각", yaxis_title="속도(km/h)", legend=dict(orientation="h"))
                 st.plotly_chart(fig, width="stretch")
+                if status == "actual_only":
+                    st.info("이 모델은 아직 예측이 없습니다(표본 부족 등).")
+                elif status == "prediction_only":
+                    st.info("실제값이 없습니다.")
 
             st.subheader("속도 히트맵")
             start_h = now - timedelta(days=1)

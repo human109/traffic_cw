@@ -261,6 +261,31 @@ def active_models(conn: sqlite3.Connection) -> list[str]:
     return [r[0] for r in rows]
 
 
+def default_model_index(models: list[str]) -> int:
+    """baseline_persistence가 있으면 그 인덱스를, 없으면 0을 반환."""
+    try:
+        return models.index("baseline_persistence")
+    except ValueError:
+        return 0 if models else 0
+
+
+def timeseries_status(df: pd.DataFrame) -> str:
+    """시계열 DataFrame의 데이터 존재 여부를 분류.
+    반환: "both", "actual_only", "prediction_only", "empty"
+    """
+    if df.empty:
+        return "empty"
+    has_actual = df["실제"].notna().any()
+    has_prediction = df["예측"].notna().any()
+    if has_actual and has_prediction:
+        return "both"
+    if has_actual:
+        return "actual_only"
+    if has_prediction:
+        return "prediction_only"
+    return "empty"
+
+
 def collection_rates(conn: sqlite3.Connection, today: date, days: int = 7) -> pd.DataFrame:
     """최근 N일 수집 성공률 테이블.
     열: 날짜, 수집일, 기대, 관측, 성공률(0~1, service day 아니면 NaN).

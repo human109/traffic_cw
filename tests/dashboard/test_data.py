@@ -14,6 +14,7 @@ from dashboard.data import (
     collection_rates,
     collection_status,
     current_table,
+    default_model_index,
     delay_minutes,
     evaluation_table,
     fmt,
@@ -22,6 +23,7 @@ from dashboard.data import (
     latest_available_at,
     segment_delays,
     timeseries,
+    timeseries_status,
 )
 
 S = Settings()
@@ -417,6 +419,28 @@ def test_collection_rates_weekend_nan(fixture_conn: sqlite3.Connection) -> None:
     # 평일이면 수집일 True
     row_mon = df[df["날짜"] == date(2026, 11, 16)].iloc[0]
     assert row_mon["수집일"] == True
+
+
+def test_default_model_index() -> None:
+    models = ["baseline_dow_mean", "baseline_persistence", "baseline_recent15"]
+    assert default_model_index(models) == 1
+    models2 = ["baseline_dow_mean", "baseline_recent15"]
+    assert default_model_index(models2) == 0
+    assert default_model_index([]) == 0
+
+
+def test_timeseries_status() -> None:
+    import pandas as pd
+    import numpy as np
+    df_both = pd.DataFrame({"시각": ["a"], "실제": [1.0], "예측": [2.0]})
+    assert timeseries_status(df_both) == "both"
+    df_actual_only = pd.DataFrame({"시각": ["a"], "실제": [1.0], "예측": [np.nan]})
+    assert timeseries_status(df_actual_only) == "actual_only"
+    df_pred_only = pd.DataFrame({"시각": ["a"], "실제": [np.nan], "예측": [2.0]})
+    assert timeseries_status(df_pred_only) == "prediction_only"
+    df_empty = pd.DataFrame(columns=["시각", "실제", "예측"])
+    assert timeseries_status(df_empty) == "empty"
+
 
 
 
