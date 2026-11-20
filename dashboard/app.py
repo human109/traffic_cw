@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 # `streamlit run dashboard/app.py`는 스크립트 폴더(dashboard/)를 sys.path에 넣으므로 저장소 루트를 추가한다.
@@ -23,6 +23,7 @@ from config.settings import get_settings  # noqa: E402
 from dashboard.data import (  # noqa: E402
     DASH,
     active_models,
+    collection_rates,
     collection_status,
     current_table,
     delay_minutes,
@@ -120,7 +121,7 @@ def render() -> None:
                 fig.add_trace(go.Scatter(x=df_ts["시각"], y=df_ts["실제"], name="실제", mode="lines+markers"))
                 fig.add_trace(go.Scatter(x=df_ts["시각"], y=df_ts["예측"], name="예측", mode="lines+markers"))
                 fig.update_layout(xaxis_title="시각", yaxis_title="속도(km/h)", legend=dict(orientation="h"))
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
             st.subheader("속도 히트맵")
             start_h = now - timedelta(days=1)
@@ -132,9 +133,61 @@ def render() -> None:
                 # Plotly Heatmap
                 fig_h = go.Figure(data=go.Heatmap(z=df_hm.values, x=df_hm.columns, y=df_hm.index, colorscale="Viridis", hoverongaps=False))
                 fig_h.update_layout(xaxis_title="구간", yaxis_title="시각")
-                st.plotly_chart(fig_h, use_container_width=True)
+                st.plotly_chart(fig_h, width="stretch")
 
         with tab_performance:
+            st.subheader("수집 성공률(평일 06:00~10:00)")
+            today_date = now.date()
+            df_rates = collection_rates(conn, today_date, days=7)
+            # 표시용 준비
+            # rate_window 종료 시각 확인
+            rate_window = s.rate_window
+            # 종료 시각 파싱
+            def _parse_hhmm(s_str):
+                h, m = map(int, s_str.split(":"))
+                return h * 60 + m
+            end_minutes = _parse_hhmm(rate_window[1])
+            now_minutes = now.hour * 60 + now.minute
+            is_today_incomplete = (today_date == now.date() and now_minutes < end_minutes)
+            # 성공률 % 표시
+            display_rows = []
+            for _, row in df_rates.iterrows():
+                d = row["날짜"]
+                is_service = bool(row["수집일"])
+                rate_val = row["성공률"]
+                if not is_service:
+                    rate_disp = "-"
+                elif pd.isna(rate_val):
+                    rate_disp = "-"
+                else:
+                    if d == today_date and is_today_incomplete:
+                        rate_disp = "집계 중"
+                    else:
+                        rate_disp = f"{rate_val * 100:.1f}%"
+                display_rows.append({
+                    "날짜": d,
+                    "수집일": "예" if is_service else "아니오",
+                    "기대": int(row["기대"]),
+                    "관측": int(row["관측"]),
+                    "성공률": rate_disp,
+                })
+            df_disp = pd.DataFrame(display_rows)
+            # 목표 미만 강조
+            def _style_row(r):
+                # 성공률 문자열 파싱
+                val = r["성공률"]
+                styles = {}
+                if val not in ("-", "집계 중"):
+                    try:
+                        pct = float(val.rstrip("%"))
+                    except:
+                        pct = None
+                    if pct is not None and pct < s.rate_target * 100:
+                        styles["성공률"] = "color: red; font-weight: bold;"
+                return pd.Series(styles)
+            styled_rates = df_disp.style.apply(_style_row, axis=1)
+            st.dataframe(styled_rates, hide_index=True)
+
             st.subheader("모델 성능 요약")
             df_perf = evaluation_table(conn, days=7)
             if df_perf.empty:

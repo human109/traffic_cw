@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -11,6 +11,7 @@ from common.timeutil import KST, to_iso
 from config.settings import Settings
 from dashboard.data import (
     BASELINE_MODEL_VERSION,
+    collection_rates,
     collection_status,
     current_table,
     delay_minutes,
@@ -394,6 +395,28 @@ def test_no_writes_extended(fixture_conn: sqlite3.Connection) -> None:
     heatmap(fixture_conn, BIN, BIN + timedelta(hours=1), NOW)
     evaluation_table(fixture_conn, days=7)
     segment_delays(fixture_conn, NOW)
+    collection_rates(fixture_conn, date(2026, 11, 16), days=7)
     assert fixture_conn.total_changes == before
+
+
+def test_collection_rates_empty(fixture_conn: sqlite3.Connection) -> None:
+    # 빈 DB에서도 오류 없이 DataFrame 반환
+    df = collection_rates(fixture_conn, date(2026, 11, 16), days=3)
+    assert list(df.columns) == ["날짜", "수집일", "기대", "관측", "성공률"]
+    assert len(df) == 3
+
+
+def test_collection_rates_weekend_nan(fixture_conn: sqlite3.Connection) -> None:
+    # 2026-11-14 is Saturday
+    df = collection_rates(fixture_conn, date(2026, 11, 16), days=3)
+    # 14일,15일,16일
+    row_sat = df[df["날짜"] == date(2026, 11, 14)].iloc[0]
+    assert not row_sat["수집일"]
+    import math
+    assert math.isnan(row_sat["성공률"])
+    # 평일이면 수집일 True
+    row_mon = df[df["날짜"] == date(2026, 11, 16)].iloc[0]
+    assert row_mon["수집일"] == True
+
 
 

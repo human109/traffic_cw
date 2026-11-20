@@ -70,10 +70,10 @@
 
 | ID | 작업 | 소유 | 상태 |
 |---|---|---|---|
-| D-DAT-05 | `schema.sql`에 `ix_pred_target_time` 반영, `scripts/collection_rate.py`(성공률), `scripts/backup_db.py`(일일 백업 14일 보관) | dev-data | in_progress |
-| D-COL-06 | `maintenance.prune_raw`(원본 30일 보관), 스케줄러에 일일 백업(03:00)·원본 정리 job, 평가 시각을 settings로, `--once --evaluate` 문서 | dev-collector | in_progress |
-| D-ML-02 | dow_mean 조회를 세그먼트당 1회·기간 하한으로, calendar 누락 경고 날짜별 1회, recent15 imputed→degraded 테스트 | dev-ml | in_progress |
-| D-DSH-02 | 성능 탭에 날짜별 수집 성공률(목표 95%), `use_container_width` → `width` | dev-dashboard | waiting (D-DAT-05) |
+| D-DAT-05 | `schema.sql`에 `ix_pred_target_time` 반영, `scripts/collection_rate.py`(성공률), `scripts/backup_db.py`(일일 백업 14일 보관) | dev-data | done (7c50593) |
+| D-COL-06 | `maintenance.prune_raw`(원본 30일 보관), 스케줄러에 일일 백업(03:00)·원본 정리 job, 평가 시각을 settings로, `--once --evaluate` 문서 | dev-collector | done (b6b204b) |
+| D-ML-02 | dow_mean 조회를 세그먼트당 1회·기간 하한으로, calendar 누락 경고 날짜별 1회, recent15 imputed→degraded 테스트 | dev-ml | done (cc4ef50) |
+| D-DSH-02 | 성능 탭에 날짜별 수집 성공률(목표 95%), `use_container_width` → `width` | dev-dashboard | done — 읽기 전용 표시 변경이라 reviewer 대신 오케스트레이터가 diff·테스트·실DB AppTest로 확인(Ruling) |
 | R-06b-2 | 출근 방향 최종 비교(07:00~09:00 전체) | researcher | 09:15 이후 |
 | I-03 | 운영 반영(`init_db`로 인덱스 적용, 수집기 재시작), Slice 0 완료 판정(11/20·23·24) | orchestrator + 사람 | waiting |
 
@@ -110,6 +110,7 @@
 | 2026-11-18 | R-03b | 8구간 후보를 6구간(S1~S6)+참고 S0로 재편 | SPEC v1.3 |
 | 2026-11-18 | Task 5 리뷰 | `segment_link.source`는 링크 ID 체계 출처, 수집원별로 거르지 않음 | C-01 v1.1, Ruling |
 | 2026-11-19 | 첫 ITS 실측 | ITS가 창원대로를 제공함(창원 bbox 6,792 링크 중 창원대로 37개). ITS는 분할 전 링크(끝 00) 단위로 값을 주며 `속도×통행시간` 역산 길이가 분할 링크 길이 합과 일치 → 분할 링크를 부모에 합쳐 링크 39개로 재구성(`config/build_segment_links.py`). 첫 실측 DB는 `data/traffic_firstfetch_20261119.db`로 보관 | Ruling |
+| 2026-11-20 | 첫 운영 지표 | 수집 성공률 11/20 99.3%(286/288). 10:05 첫 자동 평가 112행. 07~09시 전체 구간 MAE: persistence h5 2.53 / h15 3.16 / h30 5.54, recent15 h5 2.36 / h15 2.32 / h30 3.34 — recent15는 08:06 재시작 이후만 있어 표본·시간대가 달라 직접 비교 불가, 하루치 | 기록 |
 | 2026-11-20 | Slice 1 Task 8 운영 반영 | 백업 `data/backup/traffic_before_slice1_20261120.db` → `init_db`(링크 39: 4140068801 닫고 4140068800 추가, 달력 730행) → 4140068801은 처음부터 잘못 매핑이라 `valid_to=valid_from`(무효)로 정정 → `segment_traffic_5min` 비우고 11/19 09:55~ 전체를 Slice 1 규칙으로 재집계(1,855행: ok 1,746 / partial 51 / imputed 35 / missing 23). 기록 `docs/ops/2026-11-20-reaggregate-slice1.py`. S3 본선 5/5 관측 확인. 대시보드 AppTest 오류 0 | 완료, 수집기 재시작 대기 |
 | 2026-11-19 | 모델 운영 | 기본 무료 모델 사용 한도 초과 → 대체 모델 `nvidia/deepseek-ai/deepseek-v4.1-flash`가 2026-11-16 폐기(모델 목록에는 active로 표시됨). 사람 승인으로 reviewer·researcher·dev-data·dev-ml 대체 모델을 `nvidia/z-ai/glm-5.3-flash#thinking`으로 교체. dev-dashboard는 `nvidia/meta/muse-glimmer-30b#high`로 진행 | 사람 결정 |
 | 2026-11-19 | 운영 DB 정리 | 저장 범위 밖 46,725행 삭제·VACUUM(12.7MB→1.9MB), 6,435행·117링크 유지. 백업 `data/backup/traffic_before_purge_20261119.db` | 사람 승인 |

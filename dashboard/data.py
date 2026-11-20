@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 import pandas as pd
@@ -259,6 +259,27 @@ def active_models(conn: sqlite3.Connection) -> list[str]:
     """활성 모델 목록을 model_registry에서 조회."""
     rows = conn.execute("SELECT model_version FROM model_registry WHERE is_active = 1 ORDER BY model_version").fetchall()
     return [r[0] for r in rows]
+
+
+def collection_rates(conn: sqlite3.Connection, today: date, days: int = 7) -> pd.DataFrame:
+    """최근 N일 수집 성공률 테이블.
+    열: 날짜, 수집일, 기대, 관측, 성공률(0~1, service day 아니면 NaN).
+    """
+    from scripts.collection_rate import rate
+    start_date = today - timedelta(days=days - 1)
+    end_date = today
+    results = rate(conn, start_date, end_date)
+    rows = []
+    for r in results:
+        rows.append({
+            "날짜": r.date,
+            "수집일": r.is_service_day,
+            "기대": r.expected,
+            "관측": r.observed,
+            "성공률": r.rate if r.rate is not None else float("nan"),
+        })
+    cols = ["날짜", "수집일", "기대", "관측", "성공률"]
+    return pd.DataFrame(rows, columns=cols)
 
 
 def collection_status(conn: sqlite3.Connection, limit: int = 10) -> pd.DataFrame:
