@@ -46,6 +46,8 @@ class Settings:
 
     # 혼잡 등급 경계 (SPEC 9.2). 내부 대시보드와 공개 화면이 같은 값을 쓴다.
     grade_free_min_kmh: float = 40.0
+    # 대시보드 그래프·히트맵 색 축 상한(표시 전용). 실측 출근 속도가 대부분 80 미만이라 등급 색이 구분되게 둔다
+    chart_max_kmh: float = 80.0
     grade_slow_min_kmh: float = 20.0
 
     # --- 전처리 (SPEC 6.2~6.4, Slice 1) ---
