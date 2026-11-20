@@ -25,8 +25,22 @@ copy .env.example .env          # .env 에 ITS_API_KEY 를 직접 입력한다 (
 | 명령 | 하는 일 |
 |---|---|
 | `.\run_collector.ps1 --once` | 수집 → 5분 집계 → 실제값 갱신 → 예측을 1회 실행 |
-| `.\run_collector.ps1` | 위 과정을 5분마다(xx:x0:30, xx:x5:30) 상주 실행. Ctrl+C로 종료 |
+| `.\run_collector.ps1` | 상주 실행(Ctrl+C로 종료). job 3개: 5분마다(xx:x0:30, xx:x5:30) 위 과정, 매일 10:05 평가, 매일 03:00 운영(DB 백업 → 원본 정리) |
+| `.\run_collector.ps1 --evaluate` | 평가(`prediction.evaluate`)만 1회. `--once`와 함께 쓰면 파이프라인에 실패 단계가 있을 때 평가를 건너뜀 |
+| `.\run_collector.ps1 --maintenance` | 운영 작업(DB 백업 → 원본 정리)만 1회 |
 | `.\run_dashboard.ps1` | 내부 대시보드 (http://localhost:8501, 이 PC에서만) |
+
+코드나 설정(`config/settings.py`)을 바꾸면 상주 수집기를 재시작해야 반영된다. 대시보드는 새로고침이면 된다.
+
+## 운영 점검
+
+| 명령 | 하는 일 |
+|---|---|
+| `.venv\Scripts\python -m scripts.collection_rate --days 7` | 날짜별 수집 성공률(평일·비공휴일 06:00~10:00, 목표 95%)과 "연속 service day 3일 이상 달성" 판정. 읽기 전용 |
+| `.venv\Scripts\python -m scripts.backup_db` | DB 온라인 백업 → `data/backup/traffic_YYYYMMDD.db`. 14일 지난 같은 이름 형식만 삭제(수동 백업은 보존) |
+| `.venv\Scripts\python -m collector.maintenance prune-raw [--apply]` | 30일 지난 원본 응답 폴더(`data/raw/<source>/<YYYYMMDD>`) 정리. 기본은 대상만 표시, 오늘·어제는 항상 보존 |
+
+보관 기간·시각·목표값은 `config/settings.py`의 운영 절(`backup_keep_days`, `raw_keep_days`, `backup_cron_hour`, `eval_cron_hour/minute`, `rate_*`)에 있다.
 
 ## 상시 수집 (Windows)
 

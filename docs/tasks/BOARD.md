@@ -14,10 +14,12 @@
 |---|---|---|---|
 | R-01 | 경찰청 교통소통정보 API | done (실호출 확인 필요) | 사람이 키로 응답 형식을 확인한다. 지도 URL만 제공되면 수집원에서 제외한다 |
 | R-02 | ITS 소통정보 API | done (실호출 확인 필요) | 창원대로 포함 여부, 갱신 간격, 결측 표현 확인 (Slice 0 Task 10) |
-| R-03 | 표준노드링크 | partial | 파일을 받아 두었다(`data/reference/NODELINKDATA_2026-11-11/`). 창원대로 링크 표를 작성하는 R-03b가 남았다 |
+| R-03 | 표준노드링크 | done | 파일: `data/reference/NODELINKDATA_2026-11-11/`. 링크 표는 R-03b |
 | R-04 | UTIS | done | 자동 수집원으로 쓰지 않고 수동 대조용으로만 쓴다 |
 | R-05 | 공휴일·학사일정 | done | Slice 1의 달력 적재에서 사용한다 |
-| R-03b | 표준노드링크에서 창원대로 출근 방향 링크 표 추출 → `config/segment_links.csv` 후보 | ready | - |
+| R-03b | 표준노드링크에서 창원대로 출근 방향 링크 표 추출 → `config/segment_links.csv` 후보 | done | `config/build_segment_links.py`로 반영 |
+| R-06b | 링크 보정, 출근 방향 실측 비교 | done (001a895) | 평일이 쌓이면 재실행. S6 반대 방향 두 링크 상시 저속 원인은 사람 확인 |
+| R-xx | 2027 산단 휴가 기간, 임시공휴일 지정 여부 | 미착수 | 2027 달력 반영 전 |
 
 ## Slice 0 — 얇은 전체 흐름 (`docs/superpowers/plans/2026-11-18-slice0.md`)
 
@@ -41,30 +43,22 @@
 | T-OPS-01 | 에이전트별 모델 지정과 제한 시 대체 모델 규칙 문서화 | orchestrator | - | done |
 | T-OPS-02 | GitHub 공개 준비 점검: `.gitignore` 보강(`.obsidian/`), MIT LICENSE 추가 | orchestrator | - | done |
 | D-COL-05 | 저장 범위 밖 관측 행 정리(`collector/maintenance.py` purge, dry-run 기본) | dev-collector | - | done (reviewer 승인, tests/collector+contracts 59 passed) |
-| D-DAT-02b | 전처리 규칙 완성: `preprocessing/rules.py`만 작성됨(테스트·`aggregate` 배선 미완) | dev-data | D-DAT-02a | in_progress |
+| D-DAT-02b | 전처리 규칙 완성: `preprocessing/rules.py` 테스트·`aggregate` 배선 | dev-data | D-DAT-02a | done (Slice 1 Task 6에서 완료) |
+| D-DOC-01 | 문서 누락 보완: `dashboard/README.md`에 D-DSH-02·03 반영, 루트 README에 운영 명령 | dev-dashboard, orchestrator | - | in_progress |
+| T-OPS-05 | 서브에이전트 문서화 의무화: AGENTS.md 7·9·10장, dev-*/orchestrator/reviewer 프롬프트 | orchestrator | - | done |
 | D-DSH-U01 | 구간별 현재 속도 표의 '상태'(원활/서행/정체) 글씨 색 구분 | dev-dashboard | - | done (reviewer 승인, 24 passed) |
 
-### Slice 1 후보 (리뷰에서 나온 후속 과제)
+### 남은 후속 과제 (리뷰 Minor, 2026-11-20 정리)
 
-| 출처 | 내용 |
-|---|---|
-| Task 7 리뷰 | skipped 예측 행이 같은 base_time의 늦은 정상 예측을 막음(INSERT OR IGNORE) → skipped만 덮어쓰기 |
-| Task 7 리뷰 | backfill 조회 범위 제한, 예외 시 rollback |
-| Task 8 리뷰 | degraded 예측 회색 표시, 구간별 지연 판단, 수집 시각 별도 표시 |
-| D-DSH-U01 리뷰 | 다크 테마에서 상태 색 대비를 WCAG AA(4.5:1)까지 올리기(현재 3:1 기준) |
-| D-DSH-U01 리뷰 | `data.grade` 라벨 집합과 `STATUS_TEXT_COLORS` 키의 일치를 테스트로 고정 |
-| D-COL-05 리뷰 | `main()` CLI 테스트 추가: `--apply` 없으면 dry-run·무삭제, `--apply`면 삭제+VACUUM (요구사항 2 실행 검증) |
-| D-COL-05 리뷰 | purge 안전 문구 정리: "백업은 자동이 아니다" 명시, `--apply` 시 해석된 DB 경로 출력, 어떤 raw를 넘겨야 하는지 README에 기재 |
-| D-COL-05 리뷰 | `finally`의 `DROP TABLE`을 예외 안전하게, 삭제 행 수 불일치 분기 테스트 추가 |
-| Task 6 | 70% 부분 관측 기준, forward fill(2 bin), 측도 `speed_side` |
-| 실측 | `partial` 원인: 부모 링크가 체인에 없는 4140068801(S3 본선)·4150149001(S6 측도) — ITS 응답에서 대응 링크 확인 |
-| 방향 검증 | 4140071400(S3)의 ITS 끝 교차로(41400574)가 2026 노드링크(41402077)와 다름 — 링크 경계 변경으로 추정, ITS 쪽 후속 링크 확인해 매핑 보정 |
-| 방향 검증 | 평일 07:30~08:30 데이터로 우리 방향(팔용→성산)과 반대 방향(ID −100) 속도 비교해 출근 방향 정체를 실측 확인 |
-| D-COL-06 리뷰 | `prune_raw`: `raw_dir` 빈 문자열·공백 거부, 저장소 루트 기준 해석(connect와 통일) / 폴더별 try로 rmtree 실패 시 계속 / `--once --maintenance` 생략 동작 문서 / scheduler.py 끝 빈 줄 |
-| Slice 1 Task 6 리뷰 | `--once --evaluate`에서 파이프라인 실패 시 평가 생략 문서화 / 평가 시각 10:05를 settings로 |
-| 대시보드 | streamlit `use_container_width` 경고 → `width='stretch'` |
-| Slice 1 Task 4 리뷰 | dow_mean 조회에 하한 없음(데이터 축적에 비례), 세그먼트당 1회 쿼리로 묶기 / `traffic_prediction(target_time)` 인덱스(C-01 CR) / calendar 누락 경고 날짜별 1회 / recent15 근거에 imputed 섞일 때 degraded 테스트 |
-| 실측 | ITS 응답 6,792건 중 창원대로 37건만 필요 — 조회 범위(bbox)를 창원대로 좌표로 좁혀 저장량 축소 |
+| 출처 | 내용 | 소유 |
+|---|---|---|
+| D-COL-06 리뷰 | `prune_raw`: `raw_dir` 빈 문자열·공백 거부, 저장소 루트 기준 해석(connect와 통일) / 폴더별 try로 rmtree 실패 시 계속 / `--once --maintenance` 생략 동작 문서 / scheduler.py 끝 빈 줄 | dev-collector |
+| D-COL-05 리뷰 | purge `main()` CLI 테스트(dry-run 무삭제, `--apply` 삭제+VACUUM), 안전 문구("백업은 자동이 아니다", 해석된 DB 경로 출력), `finally` DROP TABLE 예외 안전·행 수 불일치 분기 테스트 | dev-collector |
+| D-DSH-U01 리뷰 | 다크 테마 상태 색 대비 WCAG AA(4.5:1)로 상향(현재 3:1) | dev-dashboard |
+| D-ML-02 리뷰 | `DOW_MEAN_LOOKBACK_WEEKS`를 settings로 이동, HH:MM 병합 가정 docstring | dev-ml + orchestrator(settings) |
+| D-DAT-05 리뷰 | 위 m2~m4는 반영 완료. 남은 것 없음 | - |
+
+정리하며 닫은 항목(코드에서 확인): Task 7 skipped 덮어쓰기·backfill 범위·rollback, Task 8 회색 표시·구간별 지연, Task 6 70%·forward fill·speed_side, S3 링크 보정(R-06b), 방향 실측 비교(R-06b 2부), 평가 시각 settings화·`--once --evaluate` 문서(D-COL-06), `width='stretch'`(D-DSH-02), dow_mean 하한·인덱스·경고(D-ML-02, D-DAT-05), ITS bbox 축소(`its_bbox`).
 
 ## Slice 1.5 — 운영 보강 (2026-11-20 시작, 계약 C-01 v1.3 · C-06 v2.2)
 
@@ -74,8 +68,9 @@
 | D-COL-06 | `maintenance.prune_raw`(원본 30일 보관), 스케줄러에 일일 백업(03:00)·원본 정리 job, 평가 시각을 settings로, `--once --evaluate` 문서 | dev-collector | done (b6b204b) |
 | D-ML-02 | dow_mean 조회를 세그먼트당 1회·기간 하한으로, calendar 누락 경고 날짜별 1회, recent15 imputed→degraded 테스트 | dev-ml | done (cc4ef50) |
 | D-DSH-02 | 성능 탭에 날짜별 수집 성공률(목표 95%), `use_container_width` → `width` | dev-dashboard | done — 읽기 전용 표시 변경이라 reviewer 대신 오케스트레이터가 diff·테스트·실DB AppTest로 확인(Ruling) |
-| R-06b-2 | 출근 방향 최종 비교(07:00~09:00 전체) | researcher | 09:15 이후 |
-| I-03 | 운영 반영(`init_db`로 인덱스 적용, 수집기 재시작), Slice 0 완료 판정(11/20·23·24) | orchestrator + 사람 | waiting |
+| D-DSH-03 | 시계열 그래프 미표시 버그(기본 모델 persistence, 실제·예측 중 하나만 있어도 표시) | dev-dashboard | done (9edd0e8) |
+| R-06b-2 | 출근 방향 최종 비교(07:00~09:00 전체) | researcher | done (001a895) |
+| I-03 | 운영 반영: 인덱스 적용·첫 백업(11/20 08:56), 수집기 재시작(11/20 11:06, job 3개 등록 로그 확인). 남은 일: 11/21 03:00 백업 생성 확인, Slice 0 완료 판정(11/20 99.3% ✅, 11/23·11/24) | orchestrator + 사람 | in_progress |
 
 ## 이후 일정
 
@@ -93,7 +88,7 @@
 
 | 슬라이스 | 주요 작업 |
 |---|---|
-| Slice 1 | 경찰청 어댑터(필요 시), 갱신 정지·70% 부분 관측·forward fill, 기준 모델 3종, 평가 지표, 시계열 그래프, `calendar_info` 적재 |
+| Slice 1 | done (11/20). 경찰청 어댑터는 보류(R-01) |
 | Slice 2 | as-of 특성(C-03), XGBoost(C-04), 성능 화면 |
 | Slice 3 | walk-forward 정식 평가, 구간별 모델 비교 |
 | Slice 4 (선택) | 시민 공개 (R-07, R-08, C-05, D-PUB-*) |
