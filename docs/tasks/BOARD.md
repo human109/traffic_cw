@@ -44,7 +44,7 @@
 | T-OPS-02 | GitHub 공개 준비 점검: `.gitignore` 보강(`.obsidian/`), MIT LICENSE 추가 | orchestrator | - | done |
 | D-COL-05 | 저장 범위 밖 관측 행 정리(`collector/maintenance.py` purge, dry-run 기본) | dev-collector | - | done (reviewer 승인, tests/collector+contracts 59 passed) |
 | D-DAT-02b | 전처리 규칙 완성: `preprocessing/rules.py` 테스트·`aggregate` 배선 | dev-data | D-DAT-02a | done (Slice 1 Task 6에서 완료) |
-| D-DOC-01 | 문서 누락 보완: `dashboard/README.md`에 D-DSH-02·03 반영, 루트 README에 운영 명령 | dev-dashboard, orchestrator | - | in_progress |
+| D-DOC-01 | 문서 누락 보완: `dashboard/README.md`에 D-DSH-02·03 반영, 루트 README에 운영 명령 | dev-dashboard, orchestrator | - | done |
 | T-OPS-05 | 서브에이전트 문서화 의무화: AGENTS.md 7·9·10장, dev-*/orchestrator/reviewer 프롬프트 | orchestrator | - | done |
 | D-DSH-U01 | 구간별 현재 속도 표의 '상태'(원활/서행/정체) 글씨 색 구분 | dev-dashboard | - | done (reviewer 승인, 24 passed) |
 

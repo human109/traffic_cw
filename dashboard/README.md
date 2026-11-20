@@ -19,8 +19,9 @@ DB 경로는 `config.settings.get_settings().db_path`(기본 `data/traffic.db`, 
 2. **탭 `현재`**: 구간별 표.
    열: 구간, 이름, 현재 속도, 상태(원활/서행/정체, 속도 기준 파생값), 품질(`ok`/`보정`/`부분`/`-`), 5·10·15·30분 후 예측.
    품질이 `보정`/`부분`인 행은 회색으로 표시(degraded/imputed). 예측은 최신 bin의 `bin_time`을 `base_time`으로 하는 `baseline_persistence` 예측 중 `executed_at ≤ 조회 시각`인 것이다.
-3. **탭 `시계열`**: 구간·horizon·모델 선택 시계열 그래프(실제 vs 예측, Plotly). 실제값은 보정·missing bin 제외(보정값 사용 안 함). 하단에 속도 히트맵(시간×구간) — 히트맵은 보정값 포함, `available_at ≤ 조회 시각`만 반영.
-4. **탭 `성능`**: `model_evaluation` 최신 행과 기준 모델 대비 개선율.
+3. **탭 `시계열`**: 구간·horizon·모델 선택 시계열 그래프(실제 vs 예측, Plotly). 실제값은 보정·missing bin 제외(보정값 사용 안 함). 모델 기본 선택은 `default_model_index`로 `baseline_persistence` 우선.
+   데이터 존재 판정은 `timeseries_status`로 분류: `both`(실제·예측 모두), `actual_only`(예측 없음 → “이 모델은 아직 예측이 없습니다…” 안내, 실제값만 표시), `prediction_only`, `empty`(“선택한 조건에 데이터가 없습니다”). 히트맵은 보정값 포함, `available_at ≤ 조회 시각`만 반영.
+4. **탭 `성능`**: 상단 “수집 성공률(평일 06:00~10:00)” 표(`collection_rates` → C-06 `scripts.collection_rate.rate`). 열: 날짜, 수집일, 기대, 관측, 성공률(%). 목표는 `settings.rate_target`, 미달 강조, 비수집일 ‘-’, 오늘 `rate_window` 종료 전 ‘집계 중’. 하단에 `model_evaluation` 최신 행과 기준 모델 대비 개선율.
 
 화면은 60초마다 자동 갱신한다(`st.fragment(run_every=60)`).
 
@@ -33,8 +34,20 @@ DB 경로는 `config.settings.get_settings().db_path`(기본 `data/traffic.db`, 
 
 ## 코드 구조
 
-- `data.py`: 조회·가공 순수 함수. `conn`을 인자로 받으므로 테스트에서 합성 DB를 넘긴다.
+- `data.py`: 조회·가공 순수 함수. `conn`을 인자로 받으므로 테스트에서 합성 DB를 넘긴다. 주요 함수:
+  - `collection_rates(conn, today, days)` → C-06 `scripts.collection_rate.rate` 래퍼
+  - `default_model_index(models)` → `baseline_persistence` 우선 기본 선택
+  - `timeseries_status(df)` → both/actual_only/prediction_only/empty 분류
+  - `timeseries`, `heatmap`, `evaluation_table`, `segment_delays`, `active_models` 등
 - `style.py`: 상태 문자열 → 글씨색(hex) 매핑 순수 함수(`status_text_color`). `data.py`는 값만 유지하고 색은 여기서.
-- `app.py`: Streamlit 화면. `database.db.connect(readonly=True)`로 연결한다. 상태 열은 `style.py` 매핑으로 색을 입힌다.
+- `app.py`: Streamlit 화면. `database.db.connect(readonly=True)`로 연결. Plotly 차트는 `width="stretch"` 사용. 상태 열은 `style.py` 매핑으로 색을 입힌다.
 
 테스트: `.venv\Scripts\python -m pytest tests/dashboard -q`
+
+## 변경 이력
+
+| 작업 ID | 날짜 | 요약 |
+|---|---|---|
+| D-DSH-02 | 2026-11-20 | 수집 성공률 표 추가, `collection_rates` 도입, 성능 탭 상단 표 및 강조·집계 중 표시 |
+| D-DSH-03 | 2026-11-20 | 시계열 기본 모델 `baseline_persistence` 고정, `timeseries_status` 기반 표시 판정, `width="stretch"` 적용 |
+
