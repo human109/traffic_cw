@@ -22,6 +22,13 @@ STATUS_TEXT_COLORS: dict[str, str] = {
 
 UNKNOWN_STATUS_COLOR = "#6e6e6e"
 
+# 배지용 배경/글자색 (WCAG AA 대비 ≥4.5:1)
+STATUS_BADGE: dict[str, dict[str, str]] = {
+    "원활": {"bg": "#D4EDDA", "fg": "#155724"},
+    "서행": {"bg": "#FFF3CD", "fg": "#856404"},
+    "정체": {"bg": "#F8D7DA", "fg": "#721C24"},
+    DASH: {"bg": "#E9ECEF", "fg": "#595959"},  # 데이터 없음(회색) → 대비 ≥4.5:1을 만족하도록 진한 회색
+}
 
 def status_text_color(value: str) -> str:
     """상태 문자열 → 표에 쓰는 글씨색.
@@ -31,3 +38,38 @@ def status_text_color(value: str) -> str:
     """
     hex_color = STATUS_TEXT_COLORS.get(value, UNKNOWN_STATUS_COLOR)
     return f"color: {hex_color};"
+
+
+def status_badge_css(value: str) -> str:
+    """상태 문자열 → 배지용 CSS (배경 + 글자, 패딩).
+
+    WCAG AA 대비 ≥4.5:1을 만족하도록 미리 정의된 색을 사용한다.
+    """
+    cfg = STATUS_BADGE.get(value, STATUS_BADGE[DASH])
+    return f"background-color: {cfg['bg']}; color: {cfg['fg']}; padding: 2px 6px; border-radius: 4px;"
+
+
+def grade_colorscale(zmax: float, slow_min_kmh: float, free_min_kmh: float) -> list[list]:
+    """등급 경계 기준 빨강→주황→초록 colorscale(순수 함수).
+
+    - 0 ~ `slow_min_kmh`: 빨강(정체)
+    - `slow_min_kmh` ~ `free_min_kmh`: 주황(서행)
+    - `free_min_kmh` ~ `zmax`: 초록(원활)
+    - zmin=0, zmax(표시용 `chart_max_kmh`) 기준으로, 경계 위치는 경계값 / zmax다.
+    색 정의는 상태 색(`STATUS_TEXT_COLORS`)과 같은 계열을 쓴다.
+    """
+    red = STATUS_TEXT_COLORS["정체"]
+    orange = STATUS_TEXT_COLORS["서행"]
+    green = STATUS_TEXT_COLORS["원활"]
+    sm = float(slow_min_kmh)
+    fm = float(free_min_kmh)
+    cm = float(zmax)
+    return [
+        [0.0, red],
+        [sm / cm, red],
+        [sm / cm, orange],
+        [fm / cm, orange],
+        [fm / cm, green],
+        [1.0, green],
+    ]
+

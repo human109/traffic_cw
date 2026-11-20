@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -16,6 +17,9 @@ import pandas as pd
 from common.grades import GRADE_LABEL, grade as _grade
 from common.timeutil import parse_iso, require_aware, to_iso
 from config.settings import Settings
+
+# 화면 전환에서 쓰는 뷰 이름(SPEC 9.1). 세그먼트 컨트롤 옵션과 query param 값이 같은 문자열을 쓴다.
+NAV_VIEWS: tuple[str, ...] = ("현재", "시계열", "성능")
 
 # dev-ml의 기준 모델 버전 문자열과 같은 값. prediction 내부 코드는 import하지 않는다(AGENTS.md 1장 4).
 BASELINE_MODEL_VERSION = "baseline_persistence"
@@ -269,6 +273,28 @@ def default_model_index(models: list[str]) -> int:
         return 0 if models else 0
 
 
+def parse_nav(params: Mapping[str, str], segments: list[str]) -> tuple[str, str]:
+    """URL query parameter(`view`, `seg`)를 화면 상태로 바꾼다. 순수 함수.
+
+    - `view`가 없거나 허용 목록(`NAV_VIEWS`)에 없으면 기본값 `"현재"`.
+    - `seg`가 없거나 대상 구간 목록에 없는 값이면 첫 번째 대상 구간.
+    - 잘못된 값은 조용히 기본값으로 떨어뜨리고, 그 이유를 예외로 던지지 않는다(화면은 깨지지 않게).
+    """
+    view = params.get("view") or NAV_VIEWS[0]
+    if view not in NAV_VIEWS:
+        view = NAV_VIEWS[0]
+    seg = params.get("seg") or (segments[0] if segments else "")
+    if seg not in segments:
+        seg = segments[0] if segments else ""
+    return view, seg
+
+
+def selection_nav(segment_id: str) -> dict[str, str]:
+    """구간 표 행 선택 → 화면 전환 목적지(순수 함수). 선택된 구간의 시계열 화면으로 간다."""
+    return {"view": NAV_VIEWS[1], "seg": segment_id}
+
+
+
 def timeseries_status(df: pd.DataFrame) -> str:
     """시계열 DataFrame의 데이터 존재 여부를 분류.
     반환: "both", "actual_only", "prediction_only", "empty"
@@ -305,6 +331,59 @@ def collection_rates(conn: sqlite3.Connection, today: date, days: int = 7) -> pd
         })
     cols = ["날짜", "수집일", "기대", "관측", "성공률"]
     return pd.DataFrame(rows, columns=cols)
+
+
+def format_collection_rates_display(df_rates: pd.DataFrame, rate_target: float, now: datetime, rate_window_end_str: str) -> pd.DataFrame:
+    """수집 성공률 DataFrame을 화면 표시용으로 포맷.
+
+    성공률 열은 퍼센트 문자열, 비수집일 → '-', 오늘 집계 중 → '집계 중'.
+    `rate_target` 인자를 실제로 써서, 미달 여부를 `미달` 열(False/True)로 함께 돌려준다.
+    """
+    def _parse_hhmm(s: str) -> int:
+        h, m = map(int, s.split(":"))
+        return h * 60 + m
+    end_minutes = _parse_hhmm(rate_window_end_str)
+    now_minutes = now.hour * 60 + now.minute
+    today = now.date()
+    rows = []
+    for _, r in df_rates.iterrows():
+        d = r["날짜"]
+        is_service = bool(r["수집일"])
+        rate_val = r["성공률"]
+        if not is_service or pd.isna(rate_val):
+            rate_disp = "-"
+            below = False
+        else:
+            if d == today and now_minutes < end_minutes:
+                rate_disp = "집계 중"
+                below = False
+            else:
+                rate_disp = f"{rate_val * 100:.1f}%"
+                below = bool(rate_val < rate_target)
+        rows.append({
+            "날짜": d,
+            "수집일": "예" if is_service else "아니오",
+            "기대": int(r["기대"]),
+            "관측": int(r["관측"]),
+            "성공률": rate_disp,
+            "미달": below,
+        })
+    cols = ["날짜", "수집일", "기대", "관측", "성공률", "미달"]
+    return pd.DataFrame(rows, columns=cols)
+
+
+def format_time_label(dt: datetime | str | None) -> str:
+    """시간 라벨: 오늘은 HH:MM, 아니면 MM-DD HH:MM. None이면 '-'.
+
+    `collection_log.started_at`처럼 ISO8601 문자열로 저장된 값도 받아낸다(C-01/C-02 문자열 ISO).
+    """
+    if dt is None:
+        return DASH
+    dt = parse_iso(dt) if isinstance(dt, str) else dt
+    today = date.today()
+    if dt.date() == today:
+        return dt.strftime("%H:%M")
+    return dt.strftime("%m-%d %H:%M")
 
 
 def collection_status(conn: sqlite3.Connection, limit: int = 10) -> pd.DataFrame:

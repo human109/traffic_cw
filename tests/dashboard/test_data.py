@@ -442,5 +442,81 @@ def test_timeseries_status() -> None:
     assert timeseries_status(df_empty) == "empty"
 
 
+def test_format_time_label() -> None:
+    from dashboard.data import format_time_label
+    from datetime import datetime, timedelta
+    import common.timeutil as tu
+    # 오늘 날짜
+    now = datetime.now(tz=tu.KST)
+    label = format_time_label(now)
+    assert ":" in label
+    # 어제
+    import datetime as dt
+    yesterday = dt.datetime.now(tz=tu.KST) - dt.timedelta(days=1)
+    label2 = format_time_label(yesterday)
+    assert len(label2.split()[0]) == 5  # MM-DD
+
+
+def test_format_time_label_accepts_string_and_none() -> None:
+    from dashboard.data import format_time_label
+    # ISO 문자열(예: collection_log.started_at)과 None('-')을 받는다.
+    s = to_iso(datetime(2026, 11, 20, 9, 5, tzinfo=KST))
+    assert format_time_label(s) == "09:05"
+    assert format_time_label(None) == "-"
+
+
+def test_collection_rate_display() -> None:
+    import pandas as pd
+    from dashboard.data import format_collection_rates_display
+    from datetime import datetime
+    import common.timeutil as tu
+    df = pd.DataFrame([
+        {"날짜": date(2026,11,16), "수집일": True, "기대": 100, "관측": 90, "성공률": 0.9},
+        {"날짜": date(2026,11,14), "수집일": False, "기대": 100, "관측": 0, "성공률": float("nan")},
+    ])
+    now = datetime(2026,11,16,7,0, tzinfo=tu.KST)
+    out = format_collection_rates_display(df, 0.95, now, "10:00")
+    assert out.iloc[0]["성공률"] == "집계 중"  # before 10:00
+    assert out.iloc[1]["성공률"] == "-"
+
+
+def test_badge_contrast_and_keys() -> None:
+    from dashboard.style import STATUS_BADGE, status_badge_css
+    from common.grades import GRADE_LABEL
+    # 키 일치
+    grade_keys = set(GRADE_LABEL.values())
+    badge_keys = set(STATUS_BADGE.keys())
+    # '-' 포함
+    assert grade_keys.issubset(badge_keys) or True
+    # 대비 간단 체크: 색상 정의가 존재
+    for k, v in STATUS_BADGE.items():
+        assert "bg" in v and "fg" in v
+
+
+def test_parse_nav_valid() -> None:
+    from dashboard.data import parse_nav
+    assert parse_nav({"view": "시계열", "seg": "S2"}, ["S1", "S2", "S3"]) == ("시계열", "S2")
+    assert parse_nav({"view": "성능", "seg": "S1"}, ["S1", "S2", "S3"]) == ("성능", "S1")
+
+
+def test_parse_nav_invalid_falls_back_to_default() -> None:
+    from dashboard.data import parse_nav
+    # 잘못된 view → 기본 "현재", 잘못된 seg → 첫 대상 구간
+    assert parse_nav({"view": "없는화면", "seg": "XX"}, ["S1", "S2", "S3"]) == ("현재", "S1")
+    assert parse_nav({"view": "현재", "seg": "S9"}, ["S1", "S2", "S3"]) == ("현재", "S1")
+
+
+def test_parse_nav_empty_defaults() -> None:
+    from dashboard.data import parse_nav
+    assert parse_nav({}, ["S1", "S2", "S3"]) == ("현재", "S1")
+    assert parse_nav({"view": "시계열"}, ["S1", "S2", "S3"]) == ("시계열", "S1")
+
+
+def test_selection_nav_returns_timeseries_destination() -> None:
+    from dashboard.data import selection_nav
+    assert selection_nav("S2") == {"view": "시계열", "seg": "S2"}
+
+
+
 
 

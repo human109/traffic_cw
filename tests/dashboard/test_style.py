@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 
 from dashboard.data import DASH
-from dashboard.style import STATUS_TEXT_COLORS, status_text_color
+from dashboard.style import STATUS_BADGE, STATUS_TEXT_COLORS, status_badge_css, status_text_color
 
 # Streamlit 기본 라이트/다크 배경(테마가 바뀌어도 대비 기준으로 쓴다).
 LIGHT_BG = "#f0f2f6"
@@ -78,3 +78,10 @@ def test_status_styler_map_styles_only_status_column() -> None:
     assert "_row0_col1 {" in block and "_row1_col1 {" in block
     assert "color: #1e7d32;" in block
     assert "color: #6e6e6e;" in block
+
+
+def test_status_badge_contrast_wcag_aa() -> None:
+    """상태 배지(bg/fg)는 WCAG AA 대비(≥ 4.5:1)를 만족해야 한다."""
+    for status, colors in STATUS_BADGE.items():
+        assert "bg" in colors and "fg" in colors
+        assert _contrast(colors["bg"], colors["fg"]) >= 4.5, f"배지 대비 불량: {status}"
