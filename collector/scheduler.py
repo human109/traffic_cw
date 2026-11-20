@@ -233,9 +233,9 @@ def main(argv: list[str] | None = None) -> int:
     """`--once`이면 파이프라인을, `--evaluate`이면 평가를, `--maintenance`이면 운영 작업을 1회 실행하고 끝난다.
 
     여러 인자를 같이 주면 once → evaluate → maintenance 순서로 실행한다. 단, 파이프라인에 실패
-    단계가 하나라도 있으면(`"error: "`로 시작) 그 시점에 종료 코드 1로 끝나므로 `--once --evaluate`
-    조합에서는 평가가 건너뛰어진다. 평가·운영 작업에서 예외가 나면 역시 1, 아니면 0을 반환한다.
-    인자가 없으면 스케줄러를 상주 실행한다(Ctrl+C로 종료, 0 반환).
+    단계가 하나라도 있으면(`"error: "`로 시작) 그 시점에 종료 코드 1로 끝나므로 `--once --evaluate`와
+    `--once --maintenance` 조합에서는 평가·운영 작업이 건너뛰어진다. 평가·운영 작업에서 예외가
+    나면 역시 1, 아니면 0을 반환한다. 인자가 없으면 스케줄러를 상주 실행한다(Ctrl+C로 종료, 0 반환).
     """
     parser = argparse.ArgumentParser(prog="python -m collector.scheduler", description="수집·전처리·예측 파이프라인")
     parser.add_argument("--once", action="store_true", help="파이프라인을 1회 실행하고 끝난다")
@@ -286,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
                 sched.shutdown(wait=False)
             log.info("스케줄러 종료")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

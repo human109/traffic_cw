@@ -11,7 +11,7 @@ from pathlib import Path
 
 from collector.base import FetchResult, SourceAdapter
 from collector.its import ItsAdapter, mask_secret
-from collector.store import insert_observations, log_collection, raw_path, save_raw
+from collector.store import insert_observations, log_collection, raw_file_ref, raw_path, save_raw
 from common.logsetup import get_logger
 from common.records import CollectionResult, CollectionStatus, ObservationRecord
 from common.timeutil import now_kst, require_aware, to_iso
@@ -86,7 +86,8 @@ def _collect(
                 path = raw_path(Path(settings.raw_dir), adapter.name, collected_at)
                 raw_existed = path.exists()
                 raw_saved = save_raw(fetched.body, adapter.name, collected_at, Path(settings.raw_dir))
-                raw_file = str(raw_saved)
+                # DB에는 기존 운영 행과 같은 루트 기준 상대 경로를 기록한다(루트 밖이면 절대 경로).
+                raw_file = raw_file_ref(raw_saved)
             except OSError as e:
                 log.error("원본 저장 실패: %s", e)
 

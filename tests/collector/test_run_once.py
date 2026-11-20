@@ -17,7 +17,7 @@ from tenacity import wait_none
 from collector import run_once
 from collector.base import FetchResult
 from collector.its import ItsAdapter
-from collector.store import save_raw
+from collector.store import raw_file_ref, raw_path, save_raw
 from common.records import ObservationRecord
 from common.timeutil import KST
 from config.settings import Settings
@@ -410,3 +410,56 @@ def test_save_raw_path(tmp_path: Path) -> None:
     p = save_raw(b"<x/>", "its", NOW, tmp_path)
     assert p == tmp_path / "its" / "20261116" / "070040.xml.gz"
     assert gzip.decompress(p.read_bytes()) == b"<x/>"
+
+
+def test_raw_file_recorded_relative_when_dir_under_root(
+    fixture_conn: sqlite3.Connection, its_sample_xml: bytes, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-COL-07 후속: 파일은 루트 기준 절대 경로에 쓰고, raw_file에는 기존 운영 행과 같은
+    루트 기준 상대 경로를 기록한다. 실제 data/raw를 만지지 않게 루트를 tmp로 바꾼다.
+    """
+    from collector import paths
+
+    fake_root = tmp_path / "repo"
+    monkeypatch.setattr(paths, "ROOT", fake_root)
+    s = replace(Settings(its_api_key="TESTKEY", raw_dir="data/raw"), its_store_road_names=(SYN_ROAD,))
+    result = run_once(NOW, fixture_conn, FakeAdapter(s, FetchResult(its_sample_xml, 200, None)), settings=s, clock=_at(NOW))
+    assert result.status in ("success", "partial")  # 대상 6개 중 5개라 partial일 수 있다
+    assert result.record_count == 5
+
+    written = fake_root / "data" / "raw" / "its" / "20261116" / "070040.xml.gz"
+    assert written.exists()  # 파일은 tmp 아래(가짜 루트)에 쓰였다
+    assert gzip.decompress(written.read_bytes()) == its_sample_xml
+
+    row = fixture_conn.execute(
+        "SELECT raw_file FROM traffic_observation WHERE source='its' AND link_id='SYN0000001'"
+    ).fetchone()
+    ref = row["raw_file"]
+    assert not Path(ref).is_absolute()  # DB 기록값은 상대 경로
+    assert ref == str(Path("data/raw") / "its" / "20261116" / "070040.xml.gz")  # 기존 운영 행 형식(OS 구분자)
+    assert (fake_root / ref).exists()  # 상대 경로가 루트 기준으로 파일을 가리킨다
+
+
+def test_raw_file_ref_absolute_when_outside_root(tmp_path: Path) -> None:
+    """D-COL-07 후속: raw_dir이 루트 밖 절대 경로면 raw_file 값도 절대 경로 그대로다."""
+    p = tmp_path / "its" / "20261116" / "070040.xml.gz"  # pytest tmp는 저장소 루트 밖이다
+    assert raw_file_ref(p) == str(p)
+    from collector.paths import ROOT, relative_to_root
+
+    assert str(relative_to_root(ROOT / "data/raw/its/20261116/070040.xml.gz")) == str(
+        Path("data/raw/its/20261116/070040.xml.gz")
+    )
+
+
+def test_raw_path_resolves_relative_dir_to_repo_root(tmp_path: Path) -> None:
+    """D-COL-07 A2: 상대 raw_dir은 저장소 루트 기준(`database.db.connect`와 같은 규칙)이다.
+
+    운영은 저장소 루트에서 실행되므로 기본 설정(`data/raw`)의 실제 경로는 이전과 같다.
+    실제 파일을 만지지 않게 경로 계산만 검사한다.
+    """
+    from collector.paths import ROOT
+
+    expected = ROOT / "data" / "raw" / "its" / "20261116" / "070040.xml.gz"
+    assert raw_path("data/raw", "its", NOW) == expected  # 운영 기본 설정과 같은 경로
+    assert raw_path(str(tmp_path), "its", NOW) == tmp_path / "its" / "20261116" / "070040.xml.gz"  # 절대 경로는 그대로
+    assert expected.relative_to(ROOT) == Path("data/raw/its/20261116/070040.xml.gz")  # 루트 기준 재확인

@@ -10,7 +10,10 @@
 3. fetch가 끝난 시각을 `collected_at`으로 기록한다(`clock` 인자, 기본 실제 시각). 넘겨받은 `now`는
    `started_at`과 대상 링크 유효 판정에만 쓴다.
 4. 응답 본문이 있으면 `data/raw/{source}/{YYYYMMDD}/{HHMMSS}.xml.gz`로 저장한다 (`store.save_raw`).
-   단 `no_update` 회차는 이번에 쓴 파일을 지워 원본을 다시 쌓지 않는다(진단이 필요한 실패 회차는 둔다).
+   상대 `raw_dir`은 저장소 루트 기준으로 해석한다(`database.db.connect`와 같은 규칙, `collector/paths.py`).
+   `traffic_observation.raw_file`에는 기존 운영 행과 같은 루트 기준 상대 경로를 기록한다
+   (`raw_dir`이 루트 밖 절대 경로면 절대 경로). 단 `no_update` 회차는 이번에 쓴 파일을 지워
+   원본을 다시 쌓지 않는다(진단이 필요한 실패 회차는 둔다).
 5. `adapter.parse`로 C-02 레코드를 만들고 `INSERT OR IGNORE`로 넣는다 (`store.insert_observations`).
 6. 상태를 판정해 `collection_log`에 1행 남기고 commit한다. 예외는 밖으로 던지지 않는다.
 
@@ -31,8 +34,8 @@
 | `base.py` | `FetchResult`, `SourceAdapter` 프로토콜 — 수집원을 추가할 때 구현할 인터페이스 |
 | `its.py` | ITS 요청 파라미터, tenacity 재시도, XML 파싱, `quality_flag` 판정, 키 가리기 |
 | `store.py` | 원본 파일·관측·로그 저장 (commit하지 않음) |
-| `maintenance.py` | 정비 도구 2가지. `purge --raw <gz>`: 저장 범위 밖 관측 행 정리(dry-run 기본, `--apply`로 삭제+VACUUM, 백업 후 실행). `prune-raw`: `raw_keep_days`(기본 30일)보다 오래된 원본 날짜 폴더 정리(dry-run 기본, `--apply`로 삭제). 날짜가 아닌 폴더·오늘·어제는 항상 보존 |
-| `scheduler.py` | 파이프라인 collect → preprocess → backfill → predict. `python -m collector.scheduler --once`로 1회, 인자 없이 상주(매 5분 30초, KST). 예정 시각보다 `scheduler_misfire_grace_s`(60초) 넘게 늦으면 그 회차는 건너뛴다. `--evaluate`로 평가 1회, `--maintenance`로 운영 작업 1회 실행. 상주 시 job 3개: 파이프라인, 평가(매일 `eval_cron_hour:eval_cron_minute`, 기본 10:05), 운영(매일 `backup_cron_hour`시, 기본 03:00 — DB 백업 후 원본 정리). `--once --evaluate` 조합에서 파이프라인에 실패 단계가 있으면 평가는 건너뛰어진다 |
+| `maintenance.py` | 정비 도구 2가지(기본 dry-run, `--apply`로 실행). `purge --raw <gz>`: 저장 범위 밖 관측 행 정리+VACUUM. `--raw`에는 저장 범위 링크를 뽑을 최근 ITS 원본(예: `data/raw/its/<YYYYMMDD>/<HHMMSS>.xml.gz`)을 넘긴다. DB 백업은 자동이 아니므로 `--apply` 전에 수동 백업하고, `--apply` 시 대상 DB 절대 경로를 출력한다. `prune-raw`: `raw_keep_days`(기본 30일)보다 오래된 원본 날짜 폴더 정리. 날짜가 아닌 폴더·오늘·어제는 항상 보존하고, 한 폴더 삭제가 실패해도 나머지를 계속 지운다 |
+| `scheduler.py` | 파이프라인 collect → preprocess → backfill → predict. `python -m collector.scheduler --once`로 1회, 인자 없이 상주(매 5분 30초, KST). 예정 시각보다 `scheduler_misfire_grace_s`(60초) 넘게 늦으면 그 회차는 건너뛴다. `--evaluate`로 평가 1회, `--maintenance`로 운영 작업 1회 실행. 상주 시 job 3개: 파이프라인, 평가(매일 `eval_cron_hour:eval_cron_minute`, 기본 10:05), 운영(매일 `backup_cron_hour`시, 기본 03:00 — DB 백업 후 원본 정리). `--once --evaluate`, `--once --maintenance` 조합에서 파이프라인에 실패 단계가 있으면 평가·운영 작업은 건너뛰어진다 |
 
 ## 주의
 

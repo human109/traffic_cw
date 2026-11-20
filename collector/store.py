@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
+from collector.paths import relative_to_root, resolve_path
 from common.records import CollectionResult, ObservationRecord
 from common.timeutil import KST, to_iso
 
@@ -18,11 +19,12 @@ from common.timeutil import KST, to_iso
 def raw_path(raw_dir: Path | str, source: str, collected_at: datetime) -> Path:
     """원본 파일 경로 `{raw_dir}/{source}/{YYYYMMDD}/{HHMMSS}.xml.gz`를 돌려준다.
 
+    상대 `raw_dir`은 저장소 루트 기준으로 해석한다(`database.db.connect`와 같은 규칙).
     저장 전에 같은 경로 파일이 이미 있었는지 확인하는 용도로도 쓴다 (M2).
     """
     to_iso(collected_at)  # tz 없는 datetime 거부
     k = collected_at.astimezone(KST)
-    return Path(raw_dir) / source / k.strftime("%Y%m%d") / f"{k.strftime('%H%M%S')}.xml.gz"
+    return resolve_path(raw_dir) / source / k.strftime("%Y%m%d") / f"{k.strftime('%H%M%S')}.xml.gz"
 
 
 def save_raw(body: bytes, source: str, collected_at: datetime, raw_dir: Path) -> Path:
@@ -34,6 +36,15 @@ def save_raw(body: bytes, source: str, collected_at: datetime, raw_dir: Path) ->
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(gzip.compress(body))
     return path
+
+
+def raw_file_ref(path: Path) -> str:
+    """`traffic_observation.raw_file`에 기록할 문자열(기존 운영 행과 같은 형식 유지).
+
+    저장소 루트 안의 파일은 루트 기준 상대 경로(예: `data\\raw\\its\\...`)로, 루트 밖 절대
+    경로는 절대 문자열로 돌려준다. 파일은 절대 경로에 쓰고 DB에는 상대 경로를 기록한다.
+    """
+    return str(relative_to_root(path))
 
 
 def insert_observations(conn: sqlite3.Connection, records: Iterable[ObservationRecord]) -> int:

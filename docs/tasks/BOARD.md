@@ -55,7 +55,8 @@
 | D-COL-06 리뷰 | `prune_raw`: `raw_dir` 빈 문자열·공백 거부, 저장소 루트 기준 해석(connect와 통일) / 폴더별 try로 rmtree 실패 시 계속 / `--once --maintenance` 생략 동작 문서 / scheduler.py 끝 빈 줄 | dev-collector |
 | D-COL-05 리뷰 | purge `main()` CLI 테스트(dry-run 무삭제, `--apply` 삭제+VACUUM), 안전 문구("백업은 자동이 아니다", 해석된 DB 경로 출력), `finally` DROP TABLE 예외 안전·행 수 불일치 분기 테스트 | dev-collector |
 | D-DSH-U01 리뷰 | 다크 테마 상태 색 대비 WCAG AA(4.5:1)로 상향(현재 3:1) | dev-dashboard |
-| D-ML-02 리뷰 | `DOW_MEAN_LOOKBACK_WEEKS`를 settings로 이동, HH:MM 병합 가정 docstring | dev-ml + orchestrator(settings) |
+| D-COL-07 리뷰 | 저장소 루트 계산이 `database/db.py`와 `collector/paths.py`에 중복 — `common/`으로 공용화 검토(CR 후보) | orchestrator(common) |
+| D-ML-03 리뷰 | 모듈 docstring의 ValueError 조건 서술을 실제 조건(target HH:MM 충돌)으로, 중복 horizon 메시지 | dev-ml |
 | D-DAT-05 리뷰 | 위 m2~m4는 반영 완료. 남은 것 없음 | - |
 
 정리하며 닫은 항목(코드에서 확인): Task 7 skipped 덮어쓰기·backfill 범위·rollback, Task 8 회색 표시·구간별 지연, Task 6 70%·forward fill·speed_side, S3 링크 보정(R-06b), 방향 실측 비교(R-06b 2부), 평가 시각 settings화·`--once --evaluate` 문서(D-COL-06), `width='stretch'`(D-DSH-02), dow_mean 하한·인덱스·경고(D-ML-02, D-DAT-05), ITS bbox 축소(`its_bbox`).
@@ -69,6 +70,9 @@
 | D-ML-02 | dow_mean 조회를 세그먼트당 1회·기간 하한으로, calendar 누락 경고 날짜별 1회, recent15 imputed→degraded 테스트 | dev-ml | done (cc4ef50) |
 | D-DSH-02 | 성능 탭에 날짜별 수집 성공률(목표 95%), `use_container_width` → `width` | dev-dashboard | done — 읽기 전용 표시 변경이라 reviewer 대신 오케스트레이터가 diff·테스트·실DB AppTest로 확인(Ruling) |
 | D-DSH-03 | 시계열 그래프 미표시 버그(기본 모델 persistence, 실제·예측 중 하나만 있어도 표시) | dev-dashboard | done (9edd0e8) |
+| D-COL-07 | `prune_raw` 안전 보강(빈 경로 거부·루트 기준·폴더별 try), purge CLI 테스트·안내 문구·DROP 예외 안전 | dev-collector | in_progress |
+| D-ML-03 | dow_mean 하한을 settings로(C-04 v1.3), HH:MM 병합 가정 가드, 경계 테스트 | dev-ml | in_progress |
+| D-DSH-04 | UI 개선: 현재 표 행 클릭 → 그 구간 시계열(사람 요구), 화면 전환을 상태·URL(`view`,`seg`)로, 상태 배지 대비 4.5:1, 등급 띠 그래프·등급 색 히트맵, 기간 선택, 성공률 표시 로직 data.py로 | dev-dashboard | in_progress |
 | R-06b-2 | 출근 방향 최종 비교(07:00~09:00 전체) | researcher | done (001a895) |
 | I-03 | 운영 반영: 인덱스 적용·첫 백업(11/20 08:56), 수집기 재시작(11/20 11:06, job 3개 등록 로그 확인). 남은 일: 11/21 03:00 백업 생성 확인, Slice 0 완료 판정(11/20 99.3% ✅, 11/23·11/24) | orchestrator + 사람 | in_progress |
 

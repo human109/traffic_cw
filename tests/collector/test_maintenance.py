@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import shutil
 import sqlite3
 from dataclasses import replace
 from datetime import datetime
@@ -137,6 +138,103 @@ def test_naive_now_rejected(fixture_conn: sqlite3.Connection) -> None:
         purge_outside_scope(fixture_conn, {"SYN0000001"}, now=datetime(2026, 11, 19, 11, 0))
 
 
+def test_purge_cli_dry_run_then_apply(
+    tmp_path: Path, fixture_db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D-COL-07 B5: CLI는 기본 dry-run(무삭제)이고 --apply면 삭제+VACUUM한다."""
+    conn = sqlite3.connect(fixture_db)
+    _add_obs(conn, OUTSIDE + [IN_SCOPE_NOT_TARGET])
+    conn.close()
+    raw = _raw(tmp_path, [("SYN0000001", SYN_ROAD), (IN_SCOPE_NOT_TARGET, SYN_ROAD)] + [(x, "다른도로") for x in OUTSIDE])
+    monkeypatch.setattr("config.settings.get_settings", lambda: SETTINGS)
+
+    def fake_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        return sqlite3.connect(fixture_db)
+
+    monkeypatch.setattr("database.db.connect", fake_connect)  # 운영 DB 대신 합성 DB
+
+    assert maintenance.main(["purge", "--raw", str(raw)]) == 0  # 기본 dry-run
+    out = capsys.readouterr().out
+    assert "dry-run" in out
+    assert "백업은 자동이 아니다" in out  # 안전 문구는 항상 출력 (B6)
+    assert "대상 DB" not in out  # --apply일 때만 DB 경로 출력
+    c = sqlite3.connect(fixture_db)
+    before = c.execute("SELECT COUNT(*) FROM traffic_observation").fetchone()[0]
+    c.close()
+
+    assert maintenance.main(["purge", "--raw", str(raw), "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "적용" in out and "VACUUM 완료" in out
+    assert "대상 DB" in out  # --apply 시 해석된 DB 절대 경로 (B6)
+    c = sqlite3.connect(fixture_db)
+    after = c.execute("SELECT COUNT(*) FROM traffic_observation").fetchone()[0]
+    ids = {r[0] for r in c.execute("SELECT DISTINCT link_id FROM traffic_observation")}
+    c.close()
+    assert after < before
+    assert not (set(OUTSIDE) & ids)  # 범위 밖 행은 지워졌다
+    assert IN_SCOPE_NOT_TARGET in ids  # 범위 안 행은 남는다
+
+
+def test_purge_deleted_count_mismatch_rolls_back(fixture_conn: sqlite3.Connection) -> None:
+    """D-COL-07 B7: DELETE rowcount가 예상과 다르면 RuntimeError로 rollback한다."""
+    _add_obs(fixture_conn, OUTSIDE)
+    before = _links(fixture_conn)
+
+    class _WrongCountConn:
+        """DELETE rowcount를 실제보다 1 크게 보고하는 연결 대역."""
+
+        def __init__(self, real: sqlite3.Connection) -> None:
+            self._real = real
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._real, name)
+
+        def execute(self, sql: str, *args: object) -> object:
+            cur = self._real.execute(sql, *args)
+            if sql.startswith("DELETE FROM traffic_observation"):
+                expected = cur.rowcount + 1
+
+                class _WrongCountCursor:
+                    rowcount = expected
+
+                    def fetchone(self) -> object:
+                        return cur.fetchone()
+
+                return _WrongCountCursor()
+            return cur
+
+    with pytest.raises(RuntimeError, match="삭제 행 수가 예상과 다르다"):
+        purge_outside_scope(_WrongCountConn(fixture_conn), {"SYN0000001"}, dry_run=False, now=NOW)  # type: ignore[arg-type]
+    assert _links(fixture_conn) == before  # rollback됐다
+
+
+def test_purge_drop_failure_does_not_mask_original_error(
+    fixture_conn: sqlite3.Connection, caplog: pytest.LogCaptureFixture
+) -> None:
+    """D-COL-07 B7: finally의 임시 테이블 DROP 실패가 원래 예외를 가리지 않는다."""
+    _add_obs(fixture_conn, OUTSIDE)
+    before = _links(fixture_conn)
+    real_execute = fixture_conn.execute
+
+    class _BrokenDropConn:
+        """DELETE 직후와 임시 테이블 DROP에서 실패하는 연결 대역."""
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(fixture_conn, name)
+
+        def execute(self, sql: str, *args: object) -> object:
+            if sql.startswith("DROP TABLE"):
+                raise sqlite3.OperationalError("synthetic drop failure")
+            if sql.startswith("DELETE FROM traffic_observation"):
+                raise sqlite3.OperationalError("synthetic delete failure")
+            return real_execute(sql, *args)
+
+    with pytest.raises(sqlite3.OperationalError, match="synthetic delete failure"):
+        purge_outside_scope(_BrokenDropConn(), {"SYN0000001"}, dry_run=False, now=NOW)  # type: ignore[arg-type]
+    assert "임시 테이블 정리 실패" in caplog.text  # DROP 실패는 경고일 뿐이다
+    assert _links(fixture_conn) == before  # rollback됐다
+
+
 # --- prune_raw (D-COL-06) ---
 
 
@@ -210,6 +308,42 @@ def test_prune_raw_missing_dir_returns_zero(tmp_path: Path) -> None:
 def test_prune_raw_naive_now_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         prune_raw(datetime(2026, 11, 20, 3, 0), _prune_settings(tmp_path, 30))
+
+
+@pytest.mark.parametrize("empty", ["", "   ", "\t "], ids=["empty", "spaces", "tabs"])
+def test_prune_raw_empty_raw_dir_rejected(tmp_path: Path, empty: str) -> None:
+    """D-COL-07 A1: raw_dir이 빈 문자열·공백이면 ValueError. 아무것도 지우지 않는다."""
+    with pytest.raises(ValueError):
+        prune_raw(PRUNE_NOW, replace(_prune_settings(tmp_path, 30), raw_dir=empty))
+
+
+def test_prune_raw_resolves_relative_raw_dir_to_repo_root() -> None:
+    """D-COL-07 A2: 상대 raw_dir은 저장소 루트 기준으로 해석된다. 경로 계산만 검사한다."""
+    from collector.paths import ROOT, resolve_path
+
+    assert resolve_path("data/raw") == ROOT / "data" / "raw"
+    assert resolve_path(ROOT / "data" / "raw") == ROOT / "data" / "raw"  # 절대 경로는 그대로
+
+
+def test_prune_raw_continues_when_one_folder_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """D-COL-07 A3: 한 폴더 삭제가 실패해도 나머지를 계속 지운다. 실패 파일은 반환값에 세지 않는다."""
+    raw = _make_raw(tmp_path / "raw", {"its": {"20260101": 2, "20260201": 1, "20261110": 1}})
+    real_rmtree = shutil.rmtree
+
+    def flaky_rmtree(path: object, *args: object, **kwargs: object) -> None:
+        if Path(str(path)).name == "20260101":
+            raise OSError("synthetic rmtree failure")
+        real_rmtree(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(maintenance.shutil, "rmtree", flaky_rmtree)
+    n = prune_raw(PRUNE_NOW, _prune_settings(tmp_path, 30), dry_run=False)
+    assert n == 1  # 성공한 폴더(20260201)의 파일 수만 센다
+    assert (raw / "its" / "20260101").is_dir()  # 실패한 폴더는 남는다
+    assert not (raw / "its" / "20260201").exists()  # 나머지는 계속 지운다
+    assert (raw / "its" / "20261110").is_dir()  # 보존 대상
+    assert "synthetic rmtree failure" in caplog.text  # 실패는 경고 로그로 남는다
 
 
 def test_prune_raw_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
