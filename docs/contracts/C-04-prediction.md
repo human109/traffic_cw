@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 상태 | frozen |
-| 버전 | v1.2 |
+| 버전 | v1.3 |
 | 영향 받는 에이전트 | dev-ml, dev-dashboard, (Phase 2) dev-publisher |
 | 계약 테스트 | `tests/prediction/`, `tests/integration/` |
 
@@ -50,6 +50,7 @@
 
 | 버전 | 일자 | 변경 | CR 출처 |
 |---|---|---|---|
+| v1.3 | 2026-11-20 | 8주 하한 값의 위치를 `config.settings.dow_mean_lookback_weeks`로 이동(의미 동일) | 후속 과제 |
 | v1.2 | 2026-11-20 | dow_mean 조회 하한 8주(`prediction.baselines.DOW_MEAN_LOOKBACK_WEEKS`) | D-ML-02 |
 | v1.1 | 2026-11-19 | 평가 교체 키를 period_end 날짜 기준으로 명시. dow_mean 표본은 `bin_time ≤ base_time` | Task 4 구현·리뷰 |
 | v1 | 2026-11-19 | 기준 모델 3종, backfill 규칙, 평가 행 정의 | Slice 1 계획, Slice 0 리뷰 |
