@@ -372,16 +372,19 @@ def format_collection_rates_display(df_rates: pd.DataFrame, rate_target: float, 
     return pd.DataFrame(rows, columns=cols)
 
 
-def format_time_label(dt: datetime | str | None) -> str:
+def format_time_label(dt: datetime | str | None, now: datetime | None = None) -> str:
     """시간 라벨: 오늘은 HH:MM, 아니면 MM-DD HH:MM. None이면 '-'.
 
     `collection_log.started_at`처럼 ISO8601 문자열로 저장된 값도 받아낸다(C-01/C-02 문자열 ISO).
+    `now`가 주어지면 `now.date()`와 비교해 '오늘'을 결정한다(테스트용 가변 기준).
     """
     if dt is None:
         return DASH
     dt = parse_iso(dt) if isinstance(dt, str) else dt
-    today = date.today()
-    if dt.date() == today:
+    if now is None:
+        from common.timeutil import now_kst
+        now = now_kst()
+    if dt.date() == now.date():
         return dt.strftime("%H:%M")
     return dt.strftime("%m-%d %H:%M")
 

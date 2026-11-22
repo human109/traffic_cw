@@ -446,22 +446,26 @@ def test_format_time_label() -> None:
     from dashboard.data import format_time_label
     from datetime import datetime, timedelta
     import common.timeutil as tu
-    # 오늘 날짜
-    now = datetime.now(tz=tu.KST)
-    label = format_time_label(now)
+    # 고정된 기준 시각 사용
+    now = datetime(2026, 11, 23, 12, 0, tzinfo=tu.KST)
+    label = format_time_label(now, now=now)
     assert ":" in label
     # 어제
-    import datetime as dt
-    yesterday = dt.datetime.now(tz=tu.KST) - dt.timedelta(days=1)
-    label2 = format_time_label(yesterday)
+    yesterday = now - timedelta(days=1)
+    label2 = format_time_label(yesterday, now=now)
     assert len(label2.split()[0]) == 5  # MM-DD
 
 
 def test_format_time_label_accepts_string_and_none() -> None:
     from dashboard.data import format_time_label
+    from datetime import datetime
     # ISO 문자열(예: collection_log.started_at)과 None('-')을 받는다.
-    s = to_iso(datetime(2026, 11, 20, 9, 5, tzinfo=KST))
-    assert format_time_label(s) == "09:05"
+    base = datetime(2026, 11, 20, 9, 5, tzinfo=KST)
+    s = to_iso(base)
+    # 기준 시각을 2026-11-20로 고정해 '오늘' 판정
+    assert format_time_label(s, now=datetime(2026, 11, 20, 12, 0, tzinfo=KST)) == "09:05"
+    # 다른 날은 날짜 포함
+    assert format_time_label(s, now=datetime(2026, 11, 23, 12, 0, tzinfo=KST)) == "11-20 09:05"
     assert format_time_label(None) == "-"
 
 

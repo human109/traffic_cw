@@ -101,9 +101,9 @@ def render() -> None:
         latest_collect = col_row[0] if col_row else None
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("조회 시각", format_time_label(now))
-        c2.metric("최신 데이터 시각", format_time_label(latest) if latest else DASH)
-        c3.metric("최근 수집 시작", format_time_label(latest_collect) if latest_collect else DASH)
+        c1.metric("조회 시각", format_time_label(now, now=now))
+        c2.metric("최신 데이터 시각", format_time_label(latest, now=now) if latest else DASH)
+        c3.metric("최근 수집 시작", format_time_label(latest_collect, now=now) if latest_collect else DASH)
         if delay is None:
             st.warning("집계 데이터 없음")
         elif delay >= s.stale_minutes:
