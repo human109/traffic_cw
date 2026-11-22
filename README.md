@@ -49,7 +49,9 @@ copy .env.example .env          # .env 에 ITS_API_KEY 를 직접 입력한다 (
    - 인수: `-NoProfile -ExecutionPolicy Bypass -File "<저장소 경로>\run_collector.ps1"`
    - 속성 → 설정: "작업이 실패하면 다시 시작" 1분 간격, "이미 실행 중이면 새 인스턴스 실행 안 함"
 2. 전원 옵션 → 절전 "안 함", Windows 업데이트 사용 시간 설정에 06:00~10:00 포함
-3. 확인: `logs/app.log`, 대시보드 하단 "최근 수집 결과"
+3. 확인: `logs/app.log`(수집기), `logs/dashboard.log`(대시보드), 대시보드 현재 화면 "최근 수집 결과"
+
+로그 파일은 프로세스마다 따로 쓴다(`LOG_FILE` 환경변수, `run_dashboard.ps1`이 `dashboard.log`로 지정). 매일 자정에 `app.log.YYYY-MM-DD`로 회전하고 30개를 보관한다. 회전이 실패하면 지금 파일에 이어 쓰고 한 시간 뒤 다시 시도한다.
 
 ## 링크 표 다시 만들기
 
