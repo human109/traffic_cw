@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -88,11 +88,79 @@ def test_collection_status_reported(
 
 def test_order() -> None:
     calls: list[tuple[str, datetime]] = []
-    result = run_pipeline(NOW, _recording_steps(calls))
+    result = run_pipeline(NOW, _recording_steps(calls), clock=lambda: NOW)
     assert [c[0] for c in calls] == ORDER
     assert all(c[1] == NOW for c in calls)
     assert result == {name: "ok" for name in ORDER}
     assert list(result) == ORDER
+
+
+def test_steps_after_collect_use_post_collect_time() -> None:
+    """D-COL-08: collect가 끝난 뒤 실행하는 단계는 collect 종료 후 시각을 as-of로 받는다."""
+    clock = [NOW]
+    calls: list[tuple[str, datetime]] = []
+
+    def make(name: str):
+        def step(t: datetime) -> object:
+            calls.append((name, t))
+            if name == "collect":
+                clock[0] = clock[0] + timedelta(seconds=3)  # collect가 시계를 3초 진행시킨다
+            return 1
+
+        return step
+
+    result = run_pipeline(NOW, [(n, make(n)) for n in ORDER], clock=lambda: clock[0])
+    assert result == {name: "ok" for name in ORDER}
+    assert calls[0] == ("collect", NOW)  # collect 자체는 원래 now
+    assert calls[1] == ("preprocess", NOW + timedelta(seconds=3))  # 그 뒤 단계는 종료 후 시각
+    assert all(c[1] == NOW + timedelta(seconds=3) for c in calls[1:])
+
+
+def test_collect_failure_still_advances_time() -> None:
+    """D-COL-08: collect가 실패해도 뒤 단계는 collect 종료 후 시각으로 실행한다(실패 격리 유지)."""
+    clock = [NOW]
+    calls: list[tuple[str, datetime]] = []
+
+    def collect(t: datetime) -> object:
+        calls.append(("collect", t))
+        clock[0] = clock[0] + timedelta(seconds=3)
+        raise RuntimeError("synthetic collect failure")
+
+    def predict(t: datetime) -> object:
+        calls.append(("predict", t))
+        return 1
+
+    result = run_pipeline(NOW, [("collect", collect), ("predict", predict)], clock=lambda: clock[0])
+    assert result == {"collect": "error: RuntimeError", "predict": "ok"}
+    assert calls[1] == ("predict", NOW + timedelta(seconds=3))
+
+
+def test_no_collect_step_keeps_given_now() -> None:
+    """collect 단계가 없으면 모든 단계가 넘겨받은 now를 받는다(clock은 쓰이지 않는다)."""
+    calls: list[tuple[str, datetime]] = []
+    later = NOW + timedelta(hours=1)
+    steps = [(name, (lambda t, name=name: calls.append((name, t)) or 1)) for name in ("preprocess", "predict")]
+    result = run_pipeline(NOW, steps, clock=lambda: later)  # type: ignore[arg-type]
+    assert result == {"preprocess": "ok", "predict": "ok"}
+    assert all(c[1] == NOW for c in calls)
+
+
+def test_pipeline_log_records_both_times(caplog: pytest.LogCaptureFixture) -> None:
+    """D-COL-08: 결과 로그에 넘겨받은 now와 collect 종료 후 as-of 두 시각이 남는다."""
+    from common.timeutil import to_iso
+
+    clock = [NOW]
+
+    def collect(t: datetime) -> object:
+        clock[0] = clock[0] + timedelta(seconds=3)
+        return 1
+
+    def preprocess(t: datetime) -> object:
+        return 1
+
+    run_pipeline(NOW, [("collect", collect), ("preprocess", preprocess)], clock=lambda: clock[0])
+    assert to_iso(NOW) in caplog.text
+    assert to_iso(NOW + timedelta(seconds=3)) in caplog.text
 
 
 def test_failure_isolated(caplog: pytest.LogCaptureFixture) -> None:

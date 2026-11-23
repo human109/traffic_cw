@@ -37,6 +37,16 @@
 | `maintenance.py` | 정비 도구 2가지(기본 dry-run, `--apply`로 실행). `purge --raw <gz>`: 저장 범위 밖 관측 행 정리+VACUUM. `--raw`에는 저장 범위 링크를 뽑을 최근 ITS 원본(예: `data/raw/its/<YYYYMMDD>/<HHMMSS>.xml.gz`)을 넘긴다. DB 백업은 자동이 아니므로 `--apply` 전에 수동 백업하고, `--apply` 시 대상 DB 절대 경로를 출력한다. `prune-raw`: `raw_keep_days`(기본 30일)보다 오래된 원본 날짜 폴더 정리. 날짜가 아닌 폴더·오늘·어제는 항상 보존하고, 한 폴더 삭제가 실패해도 나머지를 계속 지운다 |
 | `scheduler.py` | 파이프라인 collect → preprocess → backfill → predict. `python -m collector.scheduler --once`로 1회, 인자 없이 상주(매 5분 30초, KST). 예정 시각보다 `scheduler_misfire_grace_s`(60초) 넘게 늦으면 그 회차는 건너뛴다. `--evaluate`로 평가 1회, `--maintenance`로 운영 작업 1회 실행. 상주 시 job 3개: 파이프라인, 평가(매일 `eval_cron_hour:eval_cron_minute`, 기본 10:05), 운영(매일 `backup_cron_hour`시, 기본 03:00 — DB 백업 후 원본 정리). `--once --evaluate`, `--once --maintenance` 조합에서 파이프라인에 실패 단계가 있으면 평가·운영 작업은 건너뛰어진다 |
 
+## 파이프라인 as-of 시각 (D-COL-08)
+
+`run_pipeline`은 collect 단계에는 스케줄 시각(예: 10:00:30)을, collect가 끝난 뒤 실행하는 단계
+(preprocess·backfill·predict)에는 collect가 끝난 시각(예: 10:00:33)을 as-of로 넘긴다. collect가
+관측에 기록하는 `collected_at`은 그 시각이므로, 같은 회차의 집계·예측이 as-of 규칙
+(`collected_at`/`available_at ≤ until`/`now`)에서 방금 수집한 최신 bin을 놓치지 않는다.
+collect가 실패해도 뒤 단계는 새 시각으로 실행된다(실패 격리 유지). 결과 로그에 두 시각을 함께
+남긴다(`파이프라인 <now> (as-of <종료 시각>)`). 미래 정보 불변식은 그대로다 — as-of 시각에
+실제로 도착해 있는 데이터만 쓴다.
+
 ## 주의
 
 - 수집 실패를 0이나 빈 레코드로 저장하지 않는다. 빈 `speed`는 NULL, 0은 `default_value` 플래그로 남긴다.

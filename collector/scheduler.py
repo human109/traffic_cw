@@ -57,7 +57,12 @@ def _default_steps() -> list[tuple[str, Step]]:
     ]
 
 
-def run_pipeline(now: datetime, steps: Sequence[tuple[str, Step]] | None = None) -> dict[str, str]:
+def run_pipeline(
+    now: datetime,
+    steps: Sequence[tuple[str, Step]] | None = None,
+    *,
+    clock: Callable[[], datetime] = now_kst,
+) -> dict[str, str]:
     """단계를 순서대로 실행하고 단계별 결과 문자열을 돌려준다.
 
     - 예외 → `"error: <예외 클래스 이름>"`
@@ -65,22 +70,33 @@ def run_pipeline(now: datetime, steps: Sequence[tuple[str, Step]] | None = None)
     - 그 밖의 반환 → `"ok"`
     `"error: "`로 시작하는 값이 실패다(`is_failure`).
 
+    as-of 시각 규칙(D-COL-08): collect 단계에는 넘겨받은 `now`를, collect가 끝난 뒤 실행하는
+    단계에는 collect가 끝난 시각(`clock()`)을 넘긴다. collect가 관측을 기록하는 `collected_at`은
+    그 시각이므로, 같은 회차의 전처리·예측이 as-of 규칙(`collected_at/available_at ≤ until/now`)에서
+    방금 수집한 최신 bin을 놓치지 않는다. collect가 실패해도 뒤 단계는 새 시각으로 실행한다
+    (실패 격리 유지). collect 단계가 없으면 모든 단계가 `now`를 받는다. 미래 정보 불변식은
+    유지된다 — as-of 시각에 실제로 도착해 있는 데이터만 대상으로 한다.
+
     한 단계가 실패해도 다음 단계를 실행한다. 예외 메시지는 결과에 넣지 않고 키를 가려 로그에만 남긴다.
-    `now`가 timezone 정보 없는 datetime이면 `ValueError`(어떤 단계도 실행하지 않는다).
-    기본 단계를 import하지 못하면(모듈 미구현 등) 그 예외는 호출자에게 전달된다.
+    `now`가 timezone 정보 없는 datetime이면 `ValueError`(어떤 단계도 실행하지 않는다). `clock`이
+    반환한 시각이 timezone 정보 없는 datetime이거나 clock이 예외를 내면 그 예외는 호출자에게 전달된다.
+    기본 단계를 import하지 못하면(모듈 미구현 등) 그 예외도 호출자에게 전달된다.
     """
     require_aware(now)  # tz 없는 datetime 거부
     if steps is None:
         steps = _default_steps()
     results: dict[str, str] = {}
+    as_of = now
     for name, step in steps:
         try:
-            results[name] = _outcome(step(now))
+            results[name] = _outcome(step(as_of))
         except Exception as e:
             results[name] = f"error: {type(e).__name__}"
             # traceback에는 키가 섞인 URL이 들어갈 수 있어 가린 메시지만 남긴다.
             log.error("파이프라인 단계 %s 실패: %s", name, _masked(e))
-    log.info("파이프라인 %s: %s", to_iso(now), results)
+        if name == "collect":
+            as_of = clock()  # collect 종료 시각. 이후 단계의 as-of가 된다.
+    log.info("파이프라인 %s (as-of %s): %s", to_iso(now), to_iso(as_of), results)
     return results
 
 
