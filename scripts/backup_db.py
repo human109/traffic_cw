@@ -21,6 +21,7 @@ from common.logsetup import get_logger
 from common.timeutil import KST, now_kst, require_aware
 from config.settings import get_settings
 from database.db import ROOT, connect
+from scripts._console import make_stdout_lenient
 
 log = get_logger("scripts.backup_db")
 
@@ -103,7 +104,12 @@ def prune_old_backups(backup_dir: Path, today: date, keep_days: int) -> int:
 
 
 def main() -> int:
-    """CLI: 지금(KST) 기준으로 백업하고 결과 경로를 출력한다."""
+    """CLI: 지금(KST) 기준으로 백업하고 결과 경로를 출력한다.
+
+    표준출력이 cp949여도(`| Out-File` 등 리디렉션) 경로에 있는 못 쓰는 문자 때문에 죽지 않도록
+    인코딩 오류를 대체 문자로 넘긴다(D-DAT-06).
+    """
+    make_stdout_lenient()
     p = backup(now_kst())
     print(f"백업 완료: {p}")
     return 0

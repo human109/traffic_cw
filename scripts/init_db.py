@@ -20,6 +20,7 @@ from common.timeutil import now_kst  # noqa: E402
 from config.segments import SEGMENTS  # noqa: E402
 from config.settings import get_settings  # noqa: E402
 from database.db import connect, init_db  # noqa: E402
+from scripts._console import make_stdout_lenient  # noqa: E402
 from scripts.load_calendar import load as load_calendar  # noqa: E402
 from scripts.load_segments import load  # noqa: E402
 
@@ -29,7 +30,11 @@ log = get_logger("scripts.init_db")
 
 
 def main() -> int:
-    """DB 파일을 새로 만들고 스키마 생성, 구간·링크 시드, 올해·내년 달력 적재를 수행한다."""
+    """DB 파일을 새로 만들고 스키마 생성, 구간·링크 시드, 올해·내년 달력 적재를 수행한다.
+
+    로그가 cp949 콘솔·리디렉션에서 인코딩 오류로 죽지 않게 표준출력 오류 처리를 완화한다(D-DAT-06).
+    """
+    make_stdout_lenient()
     db_path = Path(get_settings().db_path)
     if not db_path.is_absolute():
         # 실행 위치와 상관없이 저장소 루트 기준으로 해석한다(connect와 같은 기준).

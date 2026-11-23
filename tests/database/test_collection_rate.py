@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import io
 import sqlite3
+import sys
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -214,3 +216,27 @@ def test_main_reads_readonly_and_prints(
     assert seen == {"readonly": True}  # CLI는 readonly로 연결한다
     assert "날짜" in out and "expected" in out
     assert "연속 service day 3일 이상" in out
+
+
+def test_main_prints_to_strict_cp949_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PowerShell 리디렉션(`| Out-File`)·파이프처럼 표준출력이 cp949(엄격)로 다시 열려도
+    # UnicodeEncodeError로 죽지 않아야 한다 (D-DAT-06). 대상 구간이 없어 rate는 모두 None이다.
+    c = connect(tmp_path / "t.db", create=True)
+    init_db(c)
+    c.close()
+    monkeypatch.setattr(
+        "scripts.collection_rate.connect",
+        lambda *args, **kwargs: connect(tmp_path / "t.db", readonly=True),
+    )
+    buf = io.BytesIO()
+    stream = io.TextIOWrapper(buf, encoding="cp949", errors="strict", newline="\n")
+    monkeypatch.setattr(sys, "stdout", stream)
+
+    assert main(["--days", "4"]) == 0
+    stream.flush()
+    text = buf.getvalue().decode("cp949")
+    assert "연속 service day" in text
+    assert "-" in text  # rate 없음 표시는 CP949에 있는 ASCII '-'다
+    assert "—" not in text  # CP949에 없는 문자를 표에 쓰지 않는다

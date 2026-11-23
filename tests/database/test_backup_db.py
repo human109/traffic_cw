@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import io
 import sqlite3
+import sys
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
@@ -181,6 +183,27 @@ def test_main_smoke_runs_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     assert backup_db.main() == 0
     assert (tmp_path / "backup" / f"traffic_{now_kst().date():%Y%m%d}.db").exists()
+
+
+def test_main_prints_to_strict_cp949_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PowerShell 리디렉션처럼 표준출력이 cp949(엄격)여도 경로 출력에서 죽지 않는다 (D-DAT-06).
+    src_db = tmp_path / "src.db"
+    c = connect(src_db, create=True)
+    init_db(c)
+    c.close()
+    monkeypatch.setenv("DB_PATH", str(src_db))
+    monkeypatch.setattr(
+        backup_db, "get_settings", lambda: Settings(backup_dir=str(tmp_path / "backup"))
+    )
+    buf = io.BytesIO()
+    stream = io.TextIOWrapper(buf, encoding="cp949", errors="strict", newline="\n")
+    monkeypatch.setattr(sys, "stdout", stream)
+
+    assert backup_db.main() == 0
+    stream.flush()
+    assert "백업 완료" in buf.getvalue().decode("cp949")
 
 
 def test_conn_none_uses_connect_and_closes(

@@ -13,6 +13,7 @@ SQLite 연결과 스키마를 제공하는 공용 모듈이다. 다른 모듈은
 | 운영 DB 생성 + 시드 적재 (`python -m scripts.init_db`) | `scripts/init_db.py` |
 | 날짜별 수집 성공률 조회: `python -m scripts.collection_rate [--days 7]` (readonly) | `scripts/collection_rate.py` |
 | 운영 DB 온라인 백업·보관 정리: `python -m scripts.backup_db` | `scripts/backup_db.py` |
+| CLI 표준출력 인코딩 방어(`make_stdout_lenient`): cp949 리디렉션에서도 `UnicodeEncodeError` 없이 출력 | `scripts/_console.py` |
 
 ## 알아 둘 점
 
@@ -20,5 +21,6 @@ SQLite 연결과 스키마를 제공하는 공용 모듈이다. 다른 모듈은
 - WAL 모드는 DB 파일에 기록되므로 쓰기 연결에서만 설정한다. readonly 연결은 기존 모드를 따른다.
 - 링크 CSV의 빈 값은 NULL로 넣는다. 길이를 모르는 링크가 하나라도 있으면 구간 `distance_m`도 NULL이다(0이 아님).
 - 시각은 모두 `YYYY-MM-DDTHH:MM:SS+09:00` 문자열로 저장한다(`common.timeutil`).
+- `scripts/` CLI의 출력은 Windows PowerShell 리디렉션(`| Out-File`)·파이프에서 표준출력이 cp949(엄격)로 다시 열려도 죽지 않아야 한다. 출력 문자열에는 cp949에 없는 문자(em dash `—`, `≥` 등)를 쓰지 않고 ASCII(`-`, `>=`)로 쓰며, 각 `main()`은 `scripts/_console.make_stdout_lenient()`로 인코딩 오류를 대체 문자로 넘긴다(D-DAT-06).
 
 테스트: `tests/database/`

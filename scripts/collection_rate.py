@@ -7,6 +7,7 @@ observed다. 행이 없는 칸은 미관측이다. 회차 상태(`partial`·`no_
 수 있는 데이터 기준이므로, 보정(`imputed`)한 값은 아직 실제 관측이 아니라서 제외한다.
 
 실행(저장소 루트): `python -m scripts.collection_rate [--days 7]` — readonly 연결로 읽는다.
+출력은 cp949 콘솔·리디렉션에서도 죽지 않도록 ASCII만 쓴다(rate 없음은 '-', D-DAT-06).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from common.logsetup import get_logger
 from common.timeutil import KST, now_kst, to_iso
 from config.settings import get_settings
 from database.db import connect
+from scripts._console import make_stdout_lenient
 
 log = get_logger("scripts.collection_rate")
 
@@ -148,7 +150,12 @@ def max_target_streak(results: list[DayRate], target: float) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: 최근 `--days`일(KST, 오늘 포함)의 날짜별 표와 연속 목표 충족 여부를 출력한다."""
+    """CLI: 최근 `--days`일(KST, 오늘 포함)의 날짜별 표와 연속 목표 충족 여부를 출력한다.
+
+    표준출력이 cp949여도(`| Out-File` 등 리디렉션) 죽지 않게 인코딩 오류를 대체 문자로 넘기고,
+    출력 문자열 자체도 CP949에 없는 문자를 쓰지 않는다(`-`, `>=`).
+    """
+    make_stdout_lenient()
     parser = argparse.ArgumentParser(description="날짜별 수집 성공률 조회 (readonly 연결)")
     parser.add_argument("--days", type=int, default=7, help="오늘(KST)부터 포함해 볼 일수 (기본 7)")
     args = parser.parse_args(argv)
@@ -171,13 +178,13 @@ def main(argv: list[str] | None = None) -> int:
     print("날짜        service  expected  observed  rate")
     for r in results:
         mark = "예" if r.is_service_day else "아니오"
-        rate_txt = "—" if r.rate is None else f"{r.rate * 100:.1f}%"
+        rate_txt = "-" if r.rate is None else f"{r.rate * 100:.1f}%"
         print(f"{r.date}  {mark:<5}  {r.expected:>8}  {r.observed:>8}  {rate_txt:>7}")
     streak = max_target_streak(results, settings.rate_target)
     required = settings.rate_streak_days
     verdict = "충족" if streak >= required else "미충족"
     print(
-        f"연속 service day {required}일 이상 ≥ rate_target"
+        f"연속 service day {required}일 이상 >= rate_target"
         f"({settings.rate_target:.0%}): {verdict} (최대 {streak}일)"
     )
     now = now_kst()
