@@ -18,18 +18,19 @@ DB 경로는 `config.settings.get_settings().db_path`(기본 `data/traffic.db`, 
    세 값은 `dashboard.data.format_time_label`로 짧게 표시한다(오늘 `HH:MM`, 아니면 `MM-DD HH:MM`).
    최신 데이터가 `stale_minutes`(10분) 이상 늦으면 `데이터 N분 지연` 경고, 집계가 없으면 `집계 데이터 없음` 경고.
 
-2. **화면 전환 (`st.segmented_control`, key=`view`)**: `현재` / `시계열` / `성능`.
-   초기값은 `st.query_params`의 `view`, `seg`로 정하고, `dashboard.data.parse_nav`이
-   잘못된 값은 기본값(현재 / 첫 대상 구간)으로 떨어뜨린다. 예: `?view=시계열&seg=S3`로 바로 열림.
-   값이 바뀌면 세그먼트 컨트롤(`key="view"`)·`st.session_state`·`st.query_params`를 함께 갱신한다.
-   매 실행 끝에 `st.query_params["view"]`/`["seg"]`를 현재 값으로 동기화하고, 컨트롤 선택 해제(None)면
-   이전 view를 유지한다.
+2. **도로 선택**: 대상 구간이 있는 도로(`road_segment.is_target=1`) 중 `settings.corridors` 순서로 정렬. `?road=` query param으로 동기화. 선택 가능한 도로가 1개면 컨트롤 숨김.
+   `dashboard.data.parse_road`가 잘못된 값을 첫 도로로 떨어뜨린다.
+
+3. **화면 전환 (`st.segmented_control`, key=`view`)**: `현재` / `시계열` / `성능`.
+   초기값은 `st.query_params`의 `view`, `seg`, `road`로 정하고, `dashboard.data.parse_nav`/`parse_road`가 잘못된 값을 기본값(현재 / 첫 도로 / 첫 구간)으로 떨어뜨린다. 예: `?road=원이대로&view=시계열&seg=W2`로 바로 열림.
+   값이 바뀌면 컨트롤·`st.session_state`·`st.query_params`를 함께 갱신한다.
+   매 실행 끝에 `st.query_params["view"]`/`["seg"]`/`["road"]`를 현재 값으로 동기화하고, 컨트롤 선택 해제(None)면 이전 view를 유지한다.
 
    - 현재 화면의 구간 표에서 행을 클릭하면 해당 구간의 시계열로 이동한다.
      선택 행의 구간 ID를 `seg`로 세팅하고 `view="시계열"`로 바꾼 뒤 `st.rerun()`
      한다(`dashboard.data.selection_nav`이 목적지를 만든다). 목적지는 세션 상태
-     `st.session_state["_nav_to"]`에 심고, 화면 전환 컨트롤 생성 전에 소비한다.
-   - `시계열` 화면의 구간 selectbox는 `seg`를 기본값으로 쓰고 라벨에 구간 이름(`start → end`)을 함께 쓴다.
+     `st.session_state["_nav_to"]`에 심고, 화면 전환 컨트롤 생성 전에 소비한다. 구간 변경 시 도로도 함께 갱신된다.
+   - `시계열` 화면의 구간 selectbox는 선택 도로의 구간만 보여주고 `seg`를 기본값으로 쓰고 라벨에 구간 이름(`start → end`)을 함께 쓴다.
 
 3. **현재**: 구간별 현재 속도·예측 표 + 하단 최근 수집 결과.
    열: 구간, 이름, 현재 속도, 상태(원활/서행/정체, 속도 기준 파생값), 품질(`ok`/`보정`/`부분`/`-`), 5·10·15·30분 후 예측.
@@ -59,10 +60,11 @@ DB 경로는 `config.settings.get_settings().db_path`(기본 `data/traffic.db`, 
 
 - `data.py`: 조회·가공 순수 함수. `conn`을 인자로 받으므로 테스트에서 합성 DB를 넘긴다. 주요 함수:
   - `parse_nav(params, segments)` → query parameter(`view`, `seg`)를 화면 상태(`view`, `seg`)로 바꾼다. 잘못된 값은 기본값으로 떨어뜨린다.
+  - `parse_road(params, roads)` → query parameter `road`를 화면 상태로 바꾼다. 잘못된 값은 첫 도로로 떨어뜨린다.
   - `selection_nav(segment_id)` → 구간 표 행 선택 → 시계열 이동 목적지.
-  - `collection_rates`, `format_collection_rates_display`, `default_model_index`, `timeseries_status`, `timeseries`, `heatmap`, `evaluation_table`, `segment_delays`, `active_models` 등
+  - `collection_rates(..., road_name=None)`, `format_collection_rates_display`, `default_model_index`, `timeseries_status`, `timeseries`, `heatmap(..., road_name=None)`, `evaluation_table(..., road_name=None)`, `segment_delays`, `active_models`, `current_table(..., road_name=None)`, `latest_available_at(..., road_name=None)` 등
 - `style.py`: 상태 문자열 → 글씨색(`status_text_color`), 상태 배지 CSS(`status_badge_css`, WCAG AA 대비 ≥ 4.5:1) 순수 함수.
-- `app.py`: Streamlit 화면. `database.db.connect(readonly=True)`로 연결. Plotly 차트는 `width="stretch"` 사용.
+- `app.py`: Streamlit 화면. `database.db.connect(readonly=True)`로 연결. Plotly 차트는 `width="stretch"` 사용. 도로 선택·세그먼트 필터링·URL 파라미터 동기화 처리.
 
 테스트: `.venv\Scripts\python -m pytest tests/dashboard -q`
 
@@ -73,3 +75,4 @@ DB 경로는 `config.settings.get_settings().db_path`(기본 `data/traffic.db`, 
 | D-DSH-02 | 2026-11-20 | 수집 성공률 표 추가, `collection_rates` 도입, 성능 탭 상단 표 및 강조·집계 중 표시 |
 | D-DSH-03 | 2026-11-20 | 시계열 기본 모델 `baseline_persistence` 고정, `timeseries_status` 기반 표시 판정, `width="stretch"` 적용 |
 | D-DSH-04 | 2026-11-20 | URL 파라미터 기반 뷰 전환, 구간 표 클릭 시 시계열 이동, 시간 라벨 포맷, 배지 대비, 성공률 표시 함수 분리, 시계열 등급 띠·히트맵 색상 개선 |
+| W-05 | 2026-11-23 | 도로 선택(`?road=`) 추가, `settings.corridors` 순서 정렬, 도로별 `current_table`/`heatmap`/`collection_rates`/`evaluation_table`/`latest_available_at` 필터, 제목에서 창원대로 고정 문구 제거, `parse_road` 도입

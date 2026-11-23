@@ -34,6 +34,7 @@ from dashboard.data import (  # noqa: E402
     heatmap,
     latest_available_at,
     parse_nav,
+    parse_road,
     segment_delays,
     selection_nav,
     timeseries,
@@ -63,38 +64,81 @@ def render() -> None:
         return
 
     try:
-        segs = [
-            (r[0], r[1], r[2])
-            for r in conn.execute(
-                "SELECT segment_id, start_node, end_node FROM road_segment WHERE is_target = 1 ORDER BY seq"
-            ).fetchall()
-        ]
-        seg_ids = [r[0] for r in segs]
+        # 대상 구간 조회 (도로 구분 포함)
+        seg_rows = conn.execute(
+            "SELECT segment_id, road_name, start_node, end_node, seq FROM road_segment WHERE is_target = 1"
+        ).fetchall()
+        # 도로 순서: settings.corridors → 목록에 없으면 road_name 순
+        road_order_map = {road: i for i, road in enumerate(s.corridors)}
+        roads = sorted({r[1] for r in seg_rows}, key=lambda rn: (road_order_map.get(rn, 9999), rn))
+        # 도로별 구간 매핑
+        road_to_segments: dict[str, list[tuple[int, str, str, str]]] = {}
+        seg_to_road: dict[str, str] = {}
+        for sid, road_name, start_node, end_node, seq in seg_rows:
+            road_to_segments.setdefault(road_name, []).append((seq, sid, start_node, end_node))
+            seg_to_road[sid] = road_name
+        for road in road_to_segments:
+            road_to_segments[road].sort(key=lambda x: x[0])
+
+        # --- 도로 선택 상태 초기화 ---
+        if "road" not in st.session_state:
+            road = parse_road(st.query_params, roads)
+            st.session_state["road"] = road
+        else:
+            road = st.session_state.get("road")
+            if road not in roads:
+                road = roads[0] if roads else ""
+                st.session_state["road"] = road
+
+        # 도로 선택 UI (하나뿐이면 숨김)
+        if len(roads) > 1:
+            road_idx = roads.index(road) if road in roads else 0
+            road_sel = st.selectbox("도로", roads, index=road_idx, key="road_select")
+            if road_sel != st.session_state.get("road"):
+                st.session_state["road"] = road_sel
+                # 도로 변경 시 구간 초기화
+                st.session_state["seg"] = road_to_segments[road_sel][0][1] if road_to_segments.get(road_sel) else ""
+                st.query_params["road"] = road_sel
+                st.rerun()
+            road = st.session_state["road"]
+        else:
+            # 단일 도로: 선택 컨트롤 숨김, 값 고정
+            road = roads[0] if roads else ""
+            st.session_state["road"] = road
+
+        # 현재 도로의 구간 목록
+        segs_for_road = road_to_segments.get(road, [])
+        segs = [(sid, start, end) for _, sid, start, end in segs_for_road]
+        seg_ids = [sid for _, sid, _, _ in segs_for_road]
 
         # --- 화면 전환 ---
-        # query_params → parse_nav → session_state["view"]/["seg"] 초기값. 행 클릭 등으로 세팅한
-        # `_nav_to`가 있으면 그 목적지로 session_state를 먼저 덮어쓴다.
         nav = st.session_state.pop("_nav_to", None)
         if nav is not None:
             st.session_state["view"] = nav.get("view") or "시계열"
-            st.session_state["seg"] = nav.get("seg") or ""
+            new_seg = nav.get("seg") or ""
+            # seg 변경 시 도로도 함께 업데이트
+            if new_seg in seg_to_road:
+                st.session_state["road"] = seg_to_road[new_seg]
+            st.session_state["seg"] = new_seg
+
         if st.session_state.get("view") is None:
             st.session_state["view"], st.session_state["seg"] = parse_nav(st.query_params, seg_ids)
 
         view = st.session_state.get("view") or "현재"
         seg = st.session_state.get("seg") or (seg_ids[0] if seg_ids else "")
 
-        # 화면 전환 컨트롤. key="view" 값을 같은 실행에서 위젯 생성 뒤에 직접 바꾸면
-        # StreamlitAPIException이 나므로, session_state를 먼저 세팅한 뒤 위젯을 생성한다.
+        # view 컨트롤
         view_before = view
         st.segmented_control("화면", list(VIEW_OPTIONS), key="view")
         view = st.session_state.get("view") or view_before
-        seg = st.session_state.get("seg") or seg
-        # 매 실행 끝에 query params를 현재 값으로 동기화한다(컨트롤 선택 해제(None)면 이전 view 유지).
+
+        # 도로·세그먼트·뷰 파라미터 동기화
+        if road:
+            st.query_params["road"] = road
         st.query_params["view"] = view or "현재"
         st.query_params["seg"] = seg or (seg_ids[0] if seg_ids else "")
 
-        latest = latest_available_at(conn, now)
+        latest = latest_available_at(conn, now, road if road else None)
         delay = delay_minutes(latest, now)
         # 최근 수집 시각
         col_row = conn.execute("SELECT started_at FROM collection_log ORDER BY started_at DESC LIMIT 1").fetchone()
@@ -121,6 +165,12 @@ def render() -> None:
                 seg = seg_label
                 st.session_state["seg"] = seg
                 st.query_params["seg"] = seg
+                # 구간 변경 시 도로도 동기화
+                seg_road = seg_to_road.get(seg)
+                if seg_road and seg_road != road:
+                    st.session_state["road"] = seg_road
+                    st.query_params["road"] = seg_road
+                    st.rerun()
                 horizon = st.selectbox("horizon(분)", list(s.horizons), index=2)
                 # 모델 선택 (활성 모델 조회)
                 models = active_models(conn)
@@ -164,7 +214,7 @@ def render() -> None:
                 st.subheader("속도 히트맵")
                 start_h = now - timedelta(days=1)
                 end_h = now
-                df_hm = heatmap(conn, start_h, end_h, now)
+                df_hm = heatmap(conn, start_h, end_h, now, road if road else None)
                 if df_hm.empty:
                     st.info("히트맵 데이터가 없습니다.")
                 else:
@@ -194,7 +244,7 @@ def render() -> None:
         elif view == "성능":
             st.subheader("수집 성공률(평일 06:00~10:00)")
             today_date = now.date()
-            df_rates = collection_rates(conn, today_date, days=7)
+            df_rates = collection_rates(conn, today_date, days=7, road_name=road if road else None)
             rate_window = s.rate_window
             display_rows = format_collection_rates_display(df_rates, s.rate_target, now, rate_window[1])
 
@@ -208,7 +258,7 @@ def render() -> None:
             st.dataframe(styled_rates, hide_index=True)
 
             st.subheader("모델 성능 요약")
-            df_perf = evaluation_table(conn, days=7)
+            df_perf = evaluation_table(conn, days=7, road_name=road if road else None)
             if df_perf.empty:
                 st.info("평가 데이터가 없습니다.")
             else:
@@ -218,7 +268,7 @@ def render() -> None:
             st.subheader("구간별 현재 속도·예측 (km/h)")
             st.caption("상태는 속도 기준 파생값(SPEC 9.2). 예측은 기준 모델(baseline_persistence).")
             st.caption("행을 클릭하면 그 구간의 시계열로 이동합니다.")
-            df_cur = current_table(conn, now, s)
+            df_cur = current_table(conn, now, s, road if road else None)
             # 품질 열이 보정/부분이면 전체 행을 회색으로 표시
             def _row_style(row):
                 degraded = row.get("품질") in ("보정", "부분")
@@ -266,6 +316,6 @@ def render() -> None:
         conn.close()
 
 
-st.set_page_config(page_title="창원대로 교통 대시보드 (내부)", layout="wide")
-st.title("창원대로 교통 대시보드 (내부)")
+st.set_page_config(page_title="교통 대시보드 (내부)", layout="wide")
+st.title("교통 대시보드 (내부)")
 render()

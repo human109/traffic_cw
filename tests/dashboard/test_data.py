@@ -516,9 +516,51 @@ def test_parse_nav_empty_defaults() -> None:
     assert parse_nav({"view": "시계열"}, ["S1", "S2", "S3"]) == ("시계열", "S1")
 
 
+def test_parse_road_valid_and_fallback() -> None:
+    from dashboard.data import parse_road
+    roads = ["ROAD_A", "ROAD_B"]
+    assert parse_road({"road": "ROAD_B"}, roads) == "ROAD_B"
+    assert parse_road({}, roads) == "ROAD_A"
+    assert parse_road({"road": "UNKNOWN"}, roads) == "ROAD_A"
+
+
 def test_selection_nav_returns_timeseries_destination() -> None:
     from dashboard.data import selection_nav
     assert selection_nav("S2") == {"view": "시계열", "seg": "S2"}
+
+
+def test_evaluation_table_road_filter_excludes_null_and_other_road(fixture_conn: sqlite3.Connection) -> None:
+    from dashboard.data import evaluation_table
+    from tests.fixtures.synthetic_db import ROAD_A, ROAD_B
+    now_ts = to_iso(datetime(2026, 11, 16, 12, 0, tzinfo=KST))
+    # model_registry 보장
+    fixture_conn.execute(
+        "INSERT OR IGNORE INTO model_registry (model_version, model_type, target_var, horizon, trained_at, is_active)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        ("baseline_persistence", "persistence", "speed", 0, now_ts, 1)
+    )
+    # 세 가지 road_name으로 평가 행 삽입
+    fixture_conn.execute(
+        "INSERT INTO model_evaluation (model_version, eval_type, period_start, period_end, segment_id, regime, road_name, n_samples, mae, evaluated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("baseline_persistence", "live", to_iso(BIN), to_iso(BIN + timedelta(days=1)), None, "h5:all", ROAD_A, 10, 0.5, now_ts)
+    )
+    fixture_conn.execute(
+        "INSERT INTO model_evaluation (model_version, eval_type, period_start, period_end, segment_id, regime, road_name, n_samples, mae, evaluated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("baseline_persistence", "live", to_iso(BIN), to_iso(BIN + timedelta(days=1)), None, "h5:all", ROAD_B, 10, 0.6, now_ts)
+    )
+    fixture_conn.execute(
+        "INSERT INTO model_evaluation (model_version, eval_type, period_start, period_end, segment_id, regime, road_name, n_samples, mae, evaluated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("baseline_persistence", "live", to_iso(BIN), to_iso(BIN + timedelta(days=1)), None, "h5:all", None, 10, 0.7, now_ts)
+    )
+    fixture_conn.commit()
+    df = evaluation_table(fixture_conn, days=7, road_name=ROAD_B)
+    # ROAD_B 행만 존재, NULL 및 ROAD_A 제외
+    assert len(df) == 1
+    assert float(df["mae"].iloc[0]) == 0.6
+
 
 
 

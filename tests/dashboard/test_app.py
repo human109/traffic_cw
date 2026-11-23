@@ -15,7 +15,7 @@ from streamlit.testing.v1 import AppTest
 
 from common.timeutil import now_kst, to_iso
 from tests.dashboard.test_data import _insert_bin, _insert_model, _insert_pred
-from tests.fixtures.synthetic_db import build_fixture_db
+from tests.fixtures.synthetic_db import build_fixture_db, ROAD_A, ROAD_B
 
 APP_PATH = Path(__file__).resolve().parents[2] / "dashboard" / "app.py"
 
@@ -41,8 +41,8 @@ def _seed_realistic(conn: sqlite3.Connection) -> None:
     )
 
 
-def _run_app(tmp_path: Path, query_params: dict[str, str] | None = None) -> AppTest:
-    db_path = build_fixture_db(tmp_path / "app_fixture.db")
+def _run_app(tmp_path: Path, query_params: dict[str, str] | None = None, second_road: bool = False, second_road_target: bool = True) -> AppTest:
+    db_path = build_fixture_db(tmp_path / "app_fixture.db", second_road=second_road, second_road_target=second_road_target)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
@@ -132,3 +132,55 @@ def test_app_performance_view_renders_with_real_data(tmp_path: Path) -> None:
     assert at.segmented_control[0].value == "성능"
     # 성공률 표 + 모델 성능 요약 dataframe
     assert len(at.dataframe) >= 1
+
+
+def test_app_road_selection_two_roads_timeseries(tmp_path: Path) -> None:
+    at = _run_app(tmp_path, query_params={"road": ROAD_B, "view": "시계열", "seg": "W2"}, second_road=True)
+    assert not at.exception
+    # 도로 선택이 반영되어야 함
+    assert at.session_state.get("road") == ROAD_B
+    # 구간 selectbox 값 W2 (첫 selectbox는 도로, 두 번째가 구간)
+    assert len(at.selectbox) >= 2
+    assert at.selectbox[1].value == "W2"
+    # 그래프 최소 1개 (데이터 없을 수 있음)
+    assert len(at.get("plotly_chart")) >= 1
+
+
+def test_app_road_invalid_falls_back(tmp_path: Path) -> None:
+    at = _run_app(tmp_path, query_params={"road": "UNKNOWN", "view": "시계열", "seg": "XX"}, second_road=True)
+    assert not at.exception
+    # 잘못된 road → 첫 도로 ROAD_A
+    assert at.session_state.get("road") == ROAD_A
+    # 잘못된 seg → 첫 구간 S1
+    assert at.session_state.get("seg") == "S1"
+
+
+def test_app_second_road_target_false_hides_road_selector(tmp_path: Path) -> None:
+    at = _run_app(tmp_path, second_road=True, second_road_target=False)
+    assert not at.exception
+    # 도로 선택 컨트롤이 없어야 함 (대상 구간이 있는 도로는 ROAD_A만)
+    assert at.session_state.get("road") == ROAD_A
+    # 도로 selectbox가 없으므로 selectbox 개수가 0이어야 함(현재 화면)
+    assert len(at.selectbox) == 0
+    # 현재 표가 렌더링됨
+    assert len(at.dataframe) >= 1
+    # 현재 표의 '구간' 열에 W로 시작하는 값이 없음을 단언
+    df_val = at.dataframe[0].value
+    # df_val은 pandas DataFrame일 수 있음
+    # 구간 열 값 추출
+    if hasattr(df_val, "columns"):
+        seg_vals = df_val["구간"].astype(str).tolist()
+    else:
+        # 대체: value가 dict 형태일 가능성
+        seg_vals = []
+    # W로 시작하는 구간이 없어야 함
+    assert all(not str(v).startswith("W") for v in seg_vals)
+
+
+def test_app_road_performance_view(tmp_path: Path) -> None:
+    at = _run_app(tmp_path, query_params={"road": ROAD_B, "view": "성능"}, second_road=True)
+    assert not at.exception
+    assert at.segmented_control[0].value == "성능"
+    # 성능 표 렌더링
+    assert len(at.dataframe) >= 1
+

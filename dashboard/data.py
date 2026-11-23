@@ -49,19 +49,28 @@ def delay_minutes(latest_available_at: datetime | None, now: datetime) -> float 
     return (now - latest_available_at).total_seconds() / 60
 
 
-def latest_available_at(conn: sqlite3.Connection, now: datetime) -> datetime | None:
+def latest_available_at(conn: sqlite3.Connection, now: datetime, road_name: str | None = None) -> datetime | None:
     """`available_at ≤ now`이고 속도가 있는 집계 bin 중 가장 최근의 available_at. 없으면 None.
 
     `missing` bin(speed NULL)의 available_at은 bin 끝 시각(C-01)이라 수집이 멈춰도 계속 늘어나므로 제외한다.
+    `road_name`이 주어지면 해당 도로의 구간만 고려한다.
     """
-    row = conn.execute(
-        "SELECT MAX(available_at) FROM segment_traffic_5min WHERE available_at <= ? AND speed IS NOT NULL",
-        (to_iso(now),),
-    ).fetchone()
+    if road_name:
+        row = conn.execute(
+            "SELECT MAX(st.available_at) FROM segment_traffic_5min st"
+            " JOIN road_segment rs ON st.segment_id = rs.segment_id"
+            " WHERE rs.is_target = 1 AND rs.road_name = ? AND st.available_at <= ? AND st.speed IS NOT NULL",
+            (road_name, to_iso(now)),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT MAX(available_at) FROM segment_traffic_5min WHERE available_at <= ? AND speed IS NOT NULL",
+            (to_iso(now),),
+        ).fetchone()
     return parse_iso(row[0]) if row and row[0] is not None else None
 
 
-def current_table(conn: sqlite3.Connection, now: datetime, s: Settings) -> pd.DataFrame:
+def current_table(conn: sqlite3.Connection, now: datetime, s: Settings, road_name: str | None = None) -> pd.DataFrame:
     """구간별 현재 속도·상태·예측 표(SPEC 9.3).
 
     is_target 구간을 seq 순으로 정렬한다. 구간마다 `available_at ≤ now`인 최신 bin과,
@@ -70,9 +79,15 @@ def current_table(conn: sqlite3.Connection, now: datetime, s: Settings) -> pd.Da
     """
     require_aware(now)
     now_iso = to_iso(now)
-    segments = conn.execute(
-        "SELECT segment_id, start_node, end_node FROM road_segment WHERE is_target = 1 ORDER BY seq"
-    ).fetchall()
+    if road_name:
+        segments = conn.execute(
+            "SELECT segment_id, start_node, end_node FROM road_segment WHERE is_target = 1 AND road_name = ? ORDER BY seq",
+            (road_name,),
+        ).fetchall()
+    else:
+        segments = conn.execute(
+            "SELECT segment_id, start_node, end_node FROM road_segment WHERE is_target = 1 ORDER BY seq"
+        ).fetchall()
 
     rows: list[dict[str, str]] = []
     for seg in segments:
@@ -161,7 +176,7 @@ def timeseries(conn: sqlite3.Connection, segment_id: str, start: datetime, end: 
     return pd.DataFrame(data)
 
 
-def heatmap(conn: sqlite3.Connection, start: datetime, end: datetime, now: datetime) -> pd.DataFrame:
+def heatmap(conn: sqlite3.Connection, start: datetime, end: datetime, now: datetime, road_name: str | None = None) -> pd.DataFrame:
     """시간×구간 히트맵: index=bin_time, columns=segment_id, value=speed.
     missing은 NaN. 히트맵은 보정값(imputed) 포함하여 보여주며, 사용 가능 시점 기준 available_at <= now 만 반영한다.
     """
@@ -172,7 +187,11 @@ def heatmap(conn: sqlite3.Connection, start: datetime, end: datetime, now: datet
     end_iso = to_iso(end)
     now_iso = to_iso(now)
     # 대상 구간 순서
-    segments = [r[0] for r in conn.execute("SELECT segment_id FROM road_segment WHERE is_target = 1 ORDER BY seq")]
+    if road_name:
+        seg_rows = conn.execute("SELECT segment_id FROM road_segment WHERE is_target = 1 AND road_name = ? ORDER BY seq", (road_name,))
+    else:
+        seg_rows = conn.execute("SELECT segment_id FROM road_segment WHERE is_target = 1 ORDER BY seq")
+    segments = [r[0] for r in seg_rows]
     if not segments:
         return pd.DataFrame()
     rows = conn.execute(
@@ -191,7 +210,7 @@ def heatmap(conn: sqlite3.Connection, start: datetime, end: datetime, now: datet
     return piv
 
 
-def evaluation_table(conn: sqlite3.Connection, days: int = 7) -> pd.DataFrame:
+def evaluation_table(conn: sqlite3.Connection, days: int = 7, road_name: str | None = None) -> pd.DataFrame:
     """model_evaluation 최신 행 + 기준 모델 대비 개선율.
     개선율 = 1 - MAE / persistence MAE (persistence 없음 → NaN)
     """
@@ -203,10 +222,16 @@ def evaluation_table(conn: sqlite3.Connection, days: int = 7) -> pd.DataFrame:
         return pd.DataFrame(columns=cols_out)
     max_eval = parse_iso(max_row[0])
     since_iso = to_iso(max_eval - timedelta(days=days))
-    rows = list(conn.execute(
-        f"SELECT {', '.join(cols)} FROM model_evaluation WHERE eval_type = 'live' AND evaluated_at >= ? ORDER BY evaluated_at DESC, id DESC",
-        (since_iso,),
-    ))
+    if road_name:
+        rows = list(conn.execute(
+            f"SELECT {', '.join(cols)} FROM model_evaluation WHERE eval_type = 'live' AND evaluated_at >= ? AND road_name = ? ORDER BY evaluated_at DESC, id DESC",
+            (since_iso, road_name),
+        ))
+    else:
+        rows = list(conn.execute(
+            f"SELECT {', '.join(cols)} FROM model_evaluation WHERE eval_type = 'live' AND evaluated_at >= ? ORDER BY evaluated_at DESC, id DESC",
+            (since_iso,),
+        ))
     if not rows:
         cols_out = cols + ["개선율"]
         return pd.DataFrame(columns=cols_out)
@@ -289,6 +314,18 @@ def parse_nav(params: Mapping[str, str], segments: list[str]) -> tuple[str, str]
     return view, seg
 
 
+def parse_road(params: Mapping[str, str], roads: list[str]) -> str:
+    """URL query parameter `road`를 화면 상태로 바꾼다. 순수 함수.
+
+    - `road`가 없거나 목록에 없으면 첫 번째 도로.
+    - 잘못된 값은 조용히 기본값으로 떨어뜨린다.
+    """
+    road = params.get("road") or (roads[0] if roads else "")
+    if road not in roads:
+        road = roads[0] if roads else ""
+    return road
+
+
 def selection_nav(segment_id: str) -> dict[str, str]:
     """구간 표 행 선택 → 화면 전환 목적지(순수 함수). 선택된 구간의 시계열 화면으로 간다."""
     return {"view": NAV_VIEWS[1], "seg": segment_id}
@@ -312,14 +349,14 @@ def timeseries_status(df: pd.DataFrame) -> str:
     return "empty"
 
 
-def collection_rates(conn: sqlite3.Connection, today: date, days: int = 7) -> pd.DataFrame:
+def collection_rates(conn: sqlite3.Connection, today: date, days: int = 7, road_name: str | None = None) -> pd.DataFrame:
     """최근 N일 수집 성공률 테이블.
     열: 날짜, 수집일, 기대, 관측, 성공률(0~1, service day 아니면 NaN).
     """
     from scripts.collection_rate import rate
     start_date = today - timedelta(days=days - 1)
     end_date = today
-    results = rate(conn, start_date, end_date)
+    results = rate(conn, start_date, end_date, road_name=road_name)
     rows = []
     for r in results:
         rows.append({
