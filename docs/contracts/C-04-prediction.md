@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 상태 | frozen |
-| 버전 | v1.3 |
+| 버전 | v1.4 |
 | 영향 받는 에이전트 | dev-ml, dev-dashboard, (Phase 2) dev-publisher |
 | 계약 테스트 | `tests/prediction/`, `tests/integration/` |
 
@@ -30,7 +30,7 @@
 ### 평가 (`model_evaluation`, `prediction.evaluate`)
 
 - 대상 예측: 기간 `[now − days, now)`의 target_time, `actual_value`·`predicted_value` 모두 NOT NULL, target_time이 평일이면서 `calendar_info.is_holiday`가 1이 아니고 `eval_window`(양끝 포함) 안. 해당 날짜의 `calendar_info` 행이 없으면 주말만 제외하고 경고 로그.
-- 행 단위: (model_version, horizon, segment_id[NULL=전체], regime).
+- 행 단위: (model_version, horizon, segment_id[NULL=도로 전체], road_name, regime). (v1.4) 집계 행은 **도로마다 따로** 만든다(두 도로를 합친 행은 만들지 않는다). 구간 행의 `road_name`은 그 구간의 도로. 대상 구간은 `is_target=1`인 구간(C-01 v1.4).
 - **horizon 표현**: 테이블에 horizon 컬럼이 없으므로 `regime` 값에 접두어를 붙인다. `h{분}:{regime}` (예: `h15:all`, `h30:congestion_onset`).
 - regime(실제값 기준):
   - `all`: 전체
@@ -38,7 +38,7 @@
   - `congested`: `grade(actual) == "jam"`
   - `congestion_onset`: 같은 구간 `target_time − 15분` bin의 실제 speed가 있고, `actual ≤ 그 값 × (1 − congestion_onset_drop)`
 - 지표: `mae`, `rmse`, `wape = Σ|pred − actual| / Σ|actual|`(분모 0이면 NULL), `grade_accuracy = grade(pred) == grade(actual)` 비율(`common.grades.grade`).
-- `eval_type='live'`, `period_start`·`period_end`는 to_iso, `evaluated_at = to_iso(now)`. 같은 (model_version, eval_type, period_end의 **날짜**, segment_id, regime) 행이 있으면 교체한다(v1.1: 하루에 여러 번 실행해도 날짜당 1벌만 남긴다).
+- `eval_type='live'`, `period_start`·`period_end`는 to_iso, `evaluated_at = to_iso(now)`. 같은 (model_version, eval_type, period_end의 **날짜**, segment_id, road_name, regime) 행이 있으면 교체한다(v1.1: 하루에 여러 번 실행해도 날짜당 1벌만 남긴다).
 - 표본이 0인 조합은 행을 만들지 않는다.
 
 ## 불변 조건
@@ -50,6 +50,7 @@
 
 | 버전 | 일자 | 변경 | CR 출처 |
 |---|---|---|---|
+| v1.4 | 2026-11-23 | 평가 집계를 도로별(`road_name`)로, 예측 대상 순서 (도로 순서, seq) | 원이대로 W-00 |
 | v1.3 | 2026-11-20 | 8주 하한 값의 위치를 `config.settings.dow_mean_lookback_weeks`로 이동(의미 동일) | 후속 과제 |
 | v1.2 | 2026-11-20 | dow_mean 조회 하한 8주(`prediction.baselines.DOW_MEAN_LOOKBACK_WEEKS`) | D-ML-02 |
 | v1.1 | 2026-11-19 | 평가 교체 키를 period_end 날짜 기준으로 명시. dow_mean 표본은 `bin_time ≤ base_time` | Task 4 구현·리뷰 |

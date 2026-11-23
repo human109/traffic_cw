@@ -67,8 +67,24 @@ def build() -> list[dict]:
     return out
 
 
+# 원이대로(R-09): 후보 행은 부모 병합·길이 배분이 끝난 상태라 그대로 쓴다.
+# valid_from은 원본 재적재 범위(2026-11-19~)를 덮도록 앞당긴다(같은 2026-11-11 배포본, 그 사이 변경 없음).
+WONI_SRC = ROOT / "docs" / "research" / "samples" / "wonidaero_segment_links_candidates_2026-11-23.csv"
+WONI_VALID_FROM = "2026-11-19T00:00:00+09:00"
+
+
+def build_wonidaero() -> list[dict]:
+    with WONI_SRC.open(encoding="utf-8", newline="") as f:
+        return [{k: r[k] for k in COLS} | {"valid_from": WONI_VALID_FROM} for r in csv.DictReader(f)]
+
+
+def build_all() -> list[dict]:
+    """`segment_links.csv` 전체 행: 창원대로(`build`) 다음 원이대로(`build_wonidaero`)."""
+    return build() + build_wonidaero()
+
+
 def main() -> None:
-    out = build()
+    out = build_all()
     with DST.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=COLS, lineterminator="\n")
         w.writeheader()

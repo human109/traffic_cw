@@ -3,7 +3,7 @@
 | 항목 | 내용 |
 |---|---|
 | 상태 | frozen |
-| 버전 | v1.3 |
+| 버전 | v1.4 |
 | 영향 받는 에이전트 | 전체 |
 | 계약 테스트 | `tests/contracts/test_c01_schema.py` |
 
@@ -28,11 +28,15 @@ DDL 원문은 `docs/contracts/C-01-schema.sql`이다. `database/schema.sql`은 �
 - `segment_traffic_5min.available_at`: 사용한 관측의 최대 `collected_at`. missing이면 bin 끝 시각.
 - `traffic_prediction.input_quality`: `ok` / `degraded` / `skipped`(predicted_value NULL)
 - `calendar_info`의 방학·휴가·연휴 인접 컬럼은 모르면 NULL이다(0은 "아님"이 확인된 경우만).
+- (v1.4) **도로 구분**: `road_segment.road_name`이 도로 키다(값은 `settings.corridors`의 원소, ITS `roadName`과 같음). 구간 순서는 항상 (`settings.corridors` 안 도로 순서 — 목록에 없는 도로는 그 뒤에 `road_name` 순, `seq`)이고 `seq`는 도로 안 순서다 — `ORDER BY seq`만 쓰면 도로가 섞인다. `is_target=1`은 도로가 `settings.target_corridors`에 있고 참고 구간(S0, W0)이 아닌 구간이다.
+- (v1.4) `model_evaluation.road_name`: 그 행이 속한 도로. 구간 행은 그 구간의 도로, 집계 행(`segment_id IS NULL`)은 집계한 도로. v1.4 이전 행은 NULL일 수 있으며 마이그레이션이 `'창원대로'`로 채운다(그때까지 대상 도로는 창원대로뿐).
+- (v1.4) **마이그레이션**: `CREATE TABLE IF NOT EXISTS`는 기존 테이블에 열을 더하지 않으므로, `database.db.init_db`는 `model_evaluation`에 `road_name` 열이 없으면 `ALTER TABLE model_evaluation ADD COLUMN road_name TEXT` 후 `UPDATE ... SET road_name='창원대로' WHERE road_name IS NULL`을 한다. 여러 번 실행해도 결과가 같아야 한다.
 
 ## 변경 이력
 
 | 버전 | 일자 | 변경 | CR 출처 |
 |---|---|---|---|
+| v1.4 | 2026-11-23 | 원이대로 확장: `road_segment.road_name`을 도로 키로 명시(정렬 규칙), `model_evaluation.road_name` 추가와 `init_db` 마이그레이션 | 원이대로 설계 W-00 |
 | v1.3 | 2026-11-20 | 인덱스 `ix_pred_target_time` 추가(backfill·평가 기간 조회). `IF NOT EXISTS`라 운영 DB에 `init_db`로 안전하게 적용 | Slice 1 Task 4 리뷰 |
 | v1.2 | 2026-11-19 | DDL 변경 없음. partial 70% 기준, imputed·speed_side·갱신 정지 규칙 정의 | Slice 1 계획 |
 | v1.1 | 2026-11-18 | DDL 변경 없음. `segment_link.source`의 의미(링크 ID 체계 출처)를 명시 | Task 5 리뷰 I-1 |

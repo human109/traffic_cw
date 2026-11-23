@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-23-wonidaero-corridor-design.md`, 근거 `docs/research/R-09-wonidaero-links.md`
 
+**Task 0 결정 (W-01):** 모듈은 `target_corridors`를 직접 읽지 않는다 — `is_target`이 시드 시점에 이를 반영하므로 모듈은 지금처럼 `is_target=1`로만 거른다. 도로 순서만 `settings.corridors`를 쓴다(목록에 없는 도로는 뒤에 `road_name` 순). 픽스처: `fixture_db_two`/`fixture_conn_two`(`ROAD_A`=합성도로 S0~S3, `ROAD_B`=합성도로B W0~W2), `build_fixture_db(path, second_road=True, second_road_target=False)`.
+
 ## Global Constraints
 
 - 도로 이름 문자열은 정확히 `창원대로`, `원이대로`(ITS `roadName` 값과 같음).

@@ -36,6 +36,21 @@ def fixture_conn(fixture_db: Path) -> Iterator[sqlite3.Connection]:
 
 
 @pytest.fixture
+def fixture_db_two(tmp_path: Path) -> Path:
+    """합성 DB(도로 2개: `ROAD_A` S0~S3, `ROAD_B` W0~W2 모두 예측 대상). C-01 v1.4 도로 구분 테스트용."""
+    return build_fixture_db(tmp_path / "fixture_two.db", second_road=True)
+
+
+@pytest.fixture
+def fixture_conn_two(fixture_db_two: Path) -> Iterator[sqlite3.Connection]:
+    conn = sqlite3.connect(fixture_db_two)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    yield conn
+    conn.close()
+
+
+@pytest.fixture
 def its_sample_xml() -> bytes:
     return (FIXTURE_DIR / "its_sample_synthetic.xml").read_bytes()
 

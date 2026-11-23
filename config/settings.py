@@ -26,8 +26,13 @@ class Settings:
     its_api_url: str = "https://openapi.its.go.kr:9443/trafficInfo"
     # (minX, maxX, minY, maxY) 경위도. TODO(R-02/R-03b): 추정치. 창원대로 링크 좌표로 좁힌다.
     its_bbox: tuple[float, float, float, float] = (128.55, 128.80, 35.15, 35.30)
-    # DB에 저장할 도로(ITS roadName). 원본 파일은 응답 전체를 보관한다 (C-02 v2).
-    its_store_road_names: tuple[str, ...] = ("창원대로",)
+    # 분석 도로(ITS roadName 값과 같다). 순서 = 표시·정렬 순서 (SPEC 3.1 v1.4)
+    corridors: tuple[str, ...] = ("창원대로", "원이대로")
+    # 예측 대상 도로: 이 도로의 참고 구간(S0, W0)이 아닌 구간만 is_target=1. 성공률 분모·예측·대시보드 범위.
+    # 원이대로는 2026-11-24 Slice 0 판정 후 추가한다(W-05).
+    target_corridors: tuple[str, ...] = ("창원대로",)
+    # DB에 저장할 도로(ITS roadName). 원본 파일은 응답 전체를 보관한다 (C-02 v2.2: = corridors).
+    its_store_road_names: tuple[str, ...] = ("창원대로", "원이대로")
 
     police_utic_api_key: str | None = field(default=None, repr=False)
 

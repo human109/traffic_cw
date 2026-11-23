@@ -36,9 +36,27 @@ def test_settings_repr_hides_key(clean_env: None, monkeypatch: pytest.MonkeyPatc
 
 def test_segments_seed() -> None:
     ids = [s["segment_id"] for s in SEGMENTS]
-    assert ids == ["S0", "S1", "S2", "S3", "S4", "S5", "S6"]
-    assert [s["is_target"] for s in SEGMENTS] == [0, 1, 1, 1, 1, 1, 1]
-    assert [s["seq"] for s in SEGMENTS] == list(range(7))
+    assert ids == ["S0", "S1", "S2", "S3", "S4", "S5", "S6", "W0", "W1", "W2", "W3", "W4", "W5"]
+    # 기본 target_corridors = ("창원대로",): 원이대로는 아직 예측 대상이 아니다 (SPEC 3.1 v1.4)
+    assert [s["is_target"] for s in SEGMENTS] == [0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+    assert [s["seq"] for s in SEGMENTS] == list(range(7)) + list(range(6))
+    assert {s["road_name"] for s in SEGMENTS[:7]} == {"창원대로"}
+    assert {s["road_name"] for s in SEGMENTS[7:]} == {"원이대로"}
+
+
+def test_segments_target_follows_corridors() -> None:
+    from config.segments import build_segments
+
+    rows = {s["segment_id"]: s["is_target"] for s in build_segments(("창원대로", "원이대로"))}
+    assert rows["W0"] == 0 and rows["S0"] == 0
+    assert all(rows[f"W{i}"] == 1 for i in range(1, 6))
+
+
+def test_store_road_names_cover_corridors() -> None:
+    from config.settings import Settings
+
+    assert set(Settings.corridors) <= set(Settings.its_store_road_names)
+    assert set(Settings.target_corridors) <= set(Settings.corridors)
 
 
 def test_segment_links_match_segments() -> None:
@@ -58,11 +76,11 @@ def test_segment_links_csv_is_build_output() -> None:
     import csv
     from pathlib import Path
 
-    from config.build_segment_links import DST, build
+    from config.build_segment_links import DST, build_all
 
     with Path(DST).open(encoding="utf-8", newline="") as f:
         on_disk = [dict(r) for r in csv.DictReader(f)]
-    assert on_disk == [{k: str(v) for k, v in r.items()} for r in build()]
+    assert on_disk == [{k: str(v) for k, v in r.items()} for r in build_all()]
 
 
 def test_split_links_merged_into_parent() -> None:

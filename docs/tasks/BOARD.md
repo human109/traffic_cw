@@ -75,6 +75,20 @@
 | R-06b-2 | 출근 방향 최종 비교(07:00~09:00 전체) | researcher | done (001a895) |
 | I-03 | 운영 반영: 인덱스 적용·첫 백업(11/20 08:56), 수집기 재시작(11/20 11:06, job 3개 등록 로그 확인). 남은 일: 11/21 03:00 백업 생성 확인, Slice 0 완료 판정(11/20 99.3% ✅, 11/23·11/24) | orchestrator + 사람 | in_progress |
 
+## 원이대로 확장 (설계 `docs/superpowers/specs/2026-11-23-wonidaero-corridor-design.md`, 계획 `docs/superpowers/plans/2026-11-23-wonidaero-corridor.md`)
+
+계약: C-01 v1.4 · C-02 v2.2 · C-04 v1.4 · C-06 v2.3, SPEC v1.4
+
+| ID | 작업 | 소유 | 상태 |
+|---|---|---|---|
+| R-09 | 원이대로 링크 표·구간 후보 | researcher | done (60fce90) |
+| W-01 | 계약·SPEC·설정(`corridors`, `target_corridors`)·구간 시드 W0~W5·링크 35행·픽스처(`fixture_db_two`) | orchestrator | done |
+| W-02 | `init_db` 마이그레이션(`model_evaluation.road_name`), schema.sql 동기화, 도로별 성공률 `rate(..., road_name)` | dev-data | in_progress |
+| W-03 | 원본 재적재 `maintenance.reload_raw` | dev-collector | in_progress |
+| W-04 | 도로별 평가 집계, 구간 순서 (도로, seq) | dev-ml | in_progress |
+| W-05 | 대시보드 도로 선택 `?road=` | dev-dashboard | in_progress |
+| W-06 | 운영 반영(11/24 판정 후): 백업 → init_db → 재적재 → 재집계 → `target_corridors`에 원이대로 → 재시작 | orchestrator + 사람 | waiting |
+
 ## 이후 일정
 
 | 시점 | 단계 |
