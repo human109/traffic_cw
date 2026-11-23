@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS model_evaluation (
     period_end      TEXT NOT NULL,
     segment_id      TEXT,
     regime          TEXT,
+    road_name       TEXT,
     n_samples       INTEGER NOT NULL,
     mae             REAL,
     rmse            REAL,

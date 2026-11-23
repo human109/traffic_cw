@@ -1,4 +1,4 @@
-"""날짜별 수집 성공률 조회 (BOARD 최종 리뷰 I3, C-06 v2.2).
+"""날짜별 수집 성공률 조회 (BOARD 최종 리뷰 I3, C-06 v2.3).
 
 정의(BOARD I3): 평일·비공휴일(service day)의 `rate_window`(bin_time 기준, 시작 포함·끝 제외)
 안 5분 bin 수 × 예측 대상(`road_segment.is_target=1`·`is_active=1`) 구간 수가 expected이고,
@@ -31,23 +31,28 @@ FROM segment_traffic_5min AS t
 JOIN road_segment AS s ON s.segment_id = t.segment_id
 WHERE s.is_target = 1
   AND s.is_active = 1
+  {road_filter}
   AND t.bin_time >= ?
   AND t.bin_time < ?
   AND t.speed IS NOT NULL
   AND t.quality_flag <> 'imputed'
 """
 
+_TARGET_SEGMENTS = "is_target = 1 AND is_active = 1"
+
 
 @dataclass(frozen=True)
 class DayRate:
-    """하루의 수집 성공률 (C-06 v2.2).
+    """하루의 수집 성공률 (C-06 v2.3).
 
-    service day(평일·비공휴일)가 아니면 `rate`는 None이다. service day라도 expected가 0이면
-    (대상 구간이 없거나 창이 비면) 나눌 수 없어 None이다. service day가 아닌 날의 expected·
-    observed는 참고용으로 그대로 센다(0으로 감추지 않는다).
+    `road_name`은 이 행이 센 도로다. `rate(..., road_name=None)`이면 모든 대상 구간을 합산하고
+    None이다. service day(평일·비공휴일)가 아니면 `rate`는 None이다. service day라도 expected가
+    0이면(대상 구간이 없거나 창이 비면) 나눌 수 없어 None이다. service day가 아닌 날의
+    expected·observed는 참고용으로 그대로 센다(0으로 감추지 않는다).
     """
 
     date: date
+    road_name: str | None
     is_service_day: bool
     expected: int
     observed: int
@@ -95,40 +100,81 @@ def _is_service_day(conn: sqlite3.Connection, day: date) -> bool:
 
 
 def _day_rate(
-    conn: sqlite3.Connection, day: date, n_bins: int, n_segments: int, window: tuple[str, str]
+    conn: sqlite3.Connection,
+    day: date,
+    n_bins: int,
+    n_segments: int,
+    window: tuple[str, str],
+    road_name: str | None,
 ) -> DayRate:
     """하루분을 계산한다. 관측 행은 bin_time 문자열 범위로만 센다."""
     service = _is_service_day(conn, day)
     expected = n_bins * n_segments
     lo, hi = _window_bounds(day, window)
-    row = conn.execute(_OBSERVED_SQL, (lo, hi)).fetchone()
-    observed = int(row[0])
+    if road_name is None:
+        sql, params = _OBSERVED_SQL.format(road_filter=""), (lo, hi)
+    else:
+        sql, params = _OBSERVED_SQL.format(road_filter="AND s.road_name = ?"), (road_name, lo, hi)
+    observed = int(conn.execute(sql, params).fetchone()[0])
     rate: float | None = observed / expected if service and expected > 0 else None
-    return DayRate(day, service, expected, observed, rate)
+    return DayRate(day, road_name, service, expected, observed, rate)
 
 
-def rate(conn: sqlite3.Connection, start_date: date, end_date: date) -> list[DayRate]:
-    """날짜별 수집 성공률을 계산한다 (C-06 v2.2).
+def _target_segment_count(conn: sqlite3.Connection, road_name: str | None) -> int:
+    """예측 대상 구간 수. `road_name`이 None이면 모든 도로의 대상 구간을 센다."""
+    if road_name is None:
+        return int(
+            conn.execute(f"SELECT COUNT(*) FROM road_segment WHERE {_TARGET_SEGMENTS}").fetchone()[0]
+        )
+    return int(
+        conn.execute(
+            f"SELECT COUNT(*) FROM road_segment WHERE {_TARGET_SEGMENTS} AND road_name = ?",
+            (road_name,),
+        ).fetchone()[0]
+    )
+
+
+def rate(
+    conn: sqlite3.Connection, start_date: date, end_date: date, road_name: str | None = None
+) -> list[DayRate]:
+    """날짜별 수집 성공률을 계산한다 (C-06 v2.3).
 
     `start_date`부터 `end_date`까지(포함, KST 날짜) 하루씩 `DayRate`를 돌려준다. 기대 칸 수는
     `rate_window` 안 5분 bin 수 × `is_target=1`·`is_active=1` 구간 수이고, observed는 그 칸 중
-    speed가 있고 `quality_flag != 'imputed'`인 칸 수다(행이 없으면 미관측). 읽기만 하고 commit
-    하지 않는다.
+    speed가 있고 `quality_flag != 'imputed'`인 칸 수다(행이 없으면 미관측).
+
+    `road_name`을 주면 그 도로의 대상 구간만 센다(다른 도로는 분모·분자에 들어가지 않는다).
+    None이면 모든 도로의 대상 구간을 합산하고 `DayRate.road_name`은 None이다. 예측 대상이 아닌
+    도로는 `is_target=0`이므로 어느 쪽에도 새지 않는다. 읽기만 하고 commit 하지 않는다.
     """
     settings = get_settings()
     window = settings.rate_window
     n_bins = _bin_count(window)
-    n_segments = int(
-        conn.execute(
-            "SELECT COUNT(*) FROM road_segment WHERE is_target = 1 AND is_active = 1"
-        ).fetchone()[0]
-    )
+    n_segments = _target_segment_count(conn, road_name)
     out: list[DayRate] = []
     day = start_date
     while day <= end_date:
-        out.append(_day_rate(conn, day, n_bins, n_segments, window))
+        out.append(_day_rate(conn, day, n_bins, n_segments, window, road_name))
         day += timedelta(days=1)
     return out
+
+
+def _target_roads(conn: sqlite3.Connection) -> list[tuple[str, int]]:
+    """대상 구간이 있는 도로와 그 구간 수를 표시 순서로 돌려준다.
+
+    순서는 `settings.corridors` 인덱스이고, 목록에 없는 도로는 뒤에 이름 순으로 붙인다(C-01 v1.4
+    정렬 규칙). 대상 구간이 없는 도로는 표에 그리지 않는다.
+    """
+    counts = {
+        row[0]: int(row[1])
+        for row in conn.execute(
+            f"SELECT road_name, COUNT(*) FROM road_segment WHERE {_TARGET_SEGMENTS} GROUP BY road_name"
+        )
+    }
+    corridors = list(get_settings().corridors)
+    ordered = [road for road in corridors if road in counts]
+    ordered += sorted(road for road in counts if road not in corridors)
+    return [(road, counts[road]) for road in ordered]
 
 
 def max_target_streak(results: list[DayRate], target: float) -> int:
@@ -167,7 +213,8 @@ def main(argv: list[str] | None = None) -> int:
     start = end - timedelta(days=args.days - 1)
     conn = connect(readonly=True)
     try:
-        results = rate(conn, start, end)
+        roads = _target_roads(conn)
+        results = {road: rate(conn, start, end, road_name=road) for road, _ in roads}
     finally:
         conn.close()
 
@@ -175,22 +222,29 @@ def main(argv: list[str] | None = None) -> int:
         f"기간 {start} ~ {end} / rate_window {settings.rate_window[0]}~{settings.rate_window[1]}"
         f"(끝 제외) / 대상 구간 is_target=1·is_active=1"
     )
-    print("날짜        service  expected  observed  rate")
-    for r in results:
-        mark = "예" if r.is_service_day else "아니오"
-        rate_txt = "-" if r.rate is None else f"{r.rate * 100:.1f}%"
-        print(f"{r.date}  {mark:<5}  {r.expected:>8}  {r.observed:>8}  {rate_txt:>7}")
-    streak = max_target_streak(results, settings.rate_target)
-    required = settings.rate_streak_days
-    verdict = "충족" if streak >= required else "미충족"
-    print(
-        f"연속 service day {required}일 이상 >= rate_target"
-        f"({settings.rate_target:.0%}): {verdict} (최대 {streak}일)"
-    )
+    if not roads:
+        print("대상 구간이 없어 표를 출력하지 않는다(is_target=1인 구간이 있는 DB인지 확인).")
+        log.info("수집 성공률 조회: %s ~ %s (대상 구간 없음)", start, end)
+        return 0
+    for road, n_segments in roads:
+        print(f"[{road}] 대상 구간 {n_segments}개")
+        print("날짜        service  expected  observed  rate")
+        rows = results[road]
+        for r in rows:
+            mark = "예" if r.is_service_day else "아니오"
+            rate_txt = "-" if r.rate is None else f"{r.rate * 100:.1f}%"
+            print(f"{r.date}  {mark:<5}  {r.expected:>8}  {r.observed:>8}  {rate_txt:>7}")
+        streak = max_target_streak(rows, settings.rate_target)
+        required = settings.rate_streak_days
+        verdict = "충족" if streak >= required else "미충족"
+        print(
+            f"연속 service day {required}일 이상 >= rate_target"
+            f"({settings.rate_target:.0%}): {verdict} (최대 {streak}일)"
+        )
     now = now_kst()
     if now.date() == end and now.time() < _parse_hhmm(settings.rate_window[1]):
         print("(오늘은 rate_window가 끝나기 전이라 실제보다 낮게 나올 수 있다)")
-    log.info("수집 성공률 조회: %s ~ %s", start, end)
+    log.info("수집 성공률 조회: %s ~ %s (도로 %d개)", start, end, len(roads))
     return 0
 
 

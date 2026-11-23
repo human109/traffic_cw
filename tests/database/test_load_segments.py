@@ -260,3 +260,45 @@ def test_link_replacement_keeps_distance_and_valid_rows(conn: sqlite3.Connection
     assert conn.execute("SELECT COUNT(*) FROM segment_link WHERE valid_to IS NULL").fetchone()[0] == 2
     d = conn.execute("SELECT distance_m FROM road_segment WHERE segment_id='S1'").fetchone()[0]
     assert d == pytest.approx(200)
+
+
+# --- 원이대로 확장 시드 (C-01 v1.4, W-02) ---
+
+REAL_LINKS_CSV = Path(__file__).resolve().parents[2] / "config" / "segment_links.csv"
+W_SEGMENTS = ["W0", "W1", "W2", "W3", "W4", "W5"]
+
+
+def test_real_seed_includes_wonidaero(conn: sqlite3.Connection) -> None:
+    """`config` 시드가 창원대로 7 + 원이대로 6구간과 링크 74행을 적재한다(W-02)."""
+    assert load(conn, SEGMENTS, REAL_LINKS_CSV) == (13, 74)
+    assert _count(conn, "road_segment") == 13
+    assert _count(conn, "segment_link") == 74
+    assert conn.execute(
+        "SELECT COUNT(*) FROM road_segment WHERE road_name = '원이대로'"
+    ).fetchone()[0] == 6
+    assert conn.execute(
+        "SELECT COUNT(*) FROM segment_link l JOIN road_segment s USING (segment_id)"
+        " WHERE s.road_name = '원이대로'"
+    ).fetchone()[0] == 35
+
+
+def test_real_seed_w_segments_are_reference_not_target(conn: sqlite3.Connection) -> None:
+    # target_corridors=("창원대로",)인 동안 W는 is_target=0 → 성공률 분모·예측에 새지 않는다.
+    load(conn, SEGMENTS, REAL_LINKS_CSV)
+    assert conn.execute("SELECT SUM(is_target) FROM road_segment").fetchone()[0] == 6
+    w_targets = conn.execute(
+        "SELECT segment_id FROM road_segment WHERE road_name = '원이대로' AND is_target = 1"
+    ).fetchall()
+    assert [r[0] for r in w_targets] == []
+
+
+def test_real_seed_w_segments_have_distance(conn: sqlite3.Connection) -> None:
+    """W 구간 6개 모두 본선 링크 길이가 모두 있어 `distance_m`이 채워진다(링크 35행)."""
+    load(conn, SEGMENTS, REAL_LINKS_CSV)
+    rows = conn.execute(
+        "SELECT segment_id, seq, distance_m FROM road_segment"
+        " WHERE road_name = '원이대로' ORDER BY seq"
+    ).fetchall()
+    assert [r["segment_id"] for r in rows] == W_SEGMENTS
+    for r in rows:
+        assert r["distance_m"] is not None and r["distance_m"] > 0, r["segment_id"]

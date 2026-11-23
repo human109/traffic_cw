@@ -10,6 +10,10 @@ from config.settings import get_settings
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 ROOT = Path(__file__).resolve().parents[1]  # 저장소 루트. 상대 db_path의 기준이다(M3).
 
+# C-01 v1.4 마이그레이션이 v1.4 이전 `model_evaluation` 행에 채우는 도로. 그때까지 예측 대상은
+# 창원대로뿐이었다. 설정값이 아니라 계약이 정한 역사적 사실이므로 하드코딩한다.
+_LEGACY_ROAD_NAME = "창원대로"
+
 
 def connect(path: str | Path | None = None, readonly: bool = False, create: bool = False) -> sqlite3.Connection:
     """SQLite 연결을 연다.
@@ -47,12 +51,46 @@ def connect(path: str | Path | None = None, readonly: bool = False, create: bool
 
 
 def init_db(conn: sqlite3.Connection) -> None:
-    """`database/schema.sql`을 실행한다. 모든 DDL이 `IF NOT EXISTS`라 다시 실행해도 안전하다.
+    """`database/schema.sql`을 실행하고 C-01 v1.4 마이그레이션을 적용한다. 재실행 안전하다.
 
-    트랜잭션 동작: `executescript`는 실행 전에 conn의 열린 트랜잭션을 먼저 암묵적으로 COMMIT한다.
-    따라서 호출 전에 커밋하지 않은 변경이 있으면 그것도 확정된다. DDL 도중 오류가 나면
-    그때까지 실행된 문장은 되돌려지지 않을 수 있다(스크립트 전체가 하나의 트랜잭션이 아님).
-    끝에서 `commit()`을 한 번 더 호출한다.
+    - `executescript`는 실행 전에 conn의 열린 트랜잭션을 먼저 암묵적으로 COMMIT한다. 따라서
+      호출 전에 커밋하지 않은 변경이 있으면 그것도 확정된다. DDL 도중 오류가 나면 그때까지 실행된
+      문장은 되돌려지지 않을 수 있다(스크립트 전체가 하나의 트랜잭션이 아님).
+    - `CREATE TABLE IF NOT EXISTS`는 기존 테이블에 열을 더하지 않으므로, v1.4 마이그레이션
+      (`_migrate_v14`)이 `model_evaluation.road_name`을 `ALTER TABLE ... ADD COLUMN`으로 더하고
+      v1.4 이전 행(NULL)을 `'창원대로'`로 채운다. 열이 이미 있으면 아무것도 바꾸지 않는다.
+    - 끝에서 `commit()`을 한 번 더 호출한다.
     """
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    _migrate_v14(conn)
     conn.commit()
+
+
+def _migrate_v14(conn: sqlite3.Connection) -> None:
+    """C-01 v1.4: `model_evaluation.road_name` 추가와 v1.4 이전 행의 도로 채우기.
+
+    1회성 마이그레이션이다. 열이 이미 있으면 아무것도 하지 않는다 — 나중에 생긴 `road_name`
+    NULL 행을 조용히 `'창원대로'`로 바꾸지 않는다(C-04 v1.4대로 모듈이 도로를 채워야 한다).
+    열을 더하는 경우에는 `BEGIN IMMEDIATE` … COMMIT로 ADD COLUMN과 UPDATE를 하나의 트랜잭션으로
+    묶어 원자적으로 적용하고, 실패하면 ROLLBACK 후 예외를 다시 던진다.
+    """
+    if _has_column(conn, "model_evaluation", "road_name"):
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # 잠금을 잡은 뒤 다시 확인한다(첫 확인과 BEGIN 사이에 다른 연결이 열을 더했을 수 있다).
+        if not _has_column(conn, "model_evaluation", "road_name"):
+            conn.execute("ALTER TABLE model_evaluation ADD COLUMN road_name TEXT")
+            # v1.4 이전 평가는 모두 창원대로 것이었다(그때까지 대상 도로가 창원대로뿐).
+            conn.execute(
+                "UPDATE model_evaluation SET road_name = ? WHERE road_name IS NULL",
+                (_LEGACY_ROAD_NAME,),
+            )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))

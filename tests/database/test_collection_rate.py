@@ -17,7 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from common.timeutil import KST, to_iso
+from common.timeutil import KST, now_kst, to_iso
+from config.segments import SEGMENTS
 from config.settings import get_settings
 from database.db import connect, init_db
 from scripts.collection_rate import (
@@ -28,6 +29,8 @@ from scripts.collection_rate import (
     max_target_streak,
     rate,
 )
+from scripts.load_segments import load
+from tests.fixtures.synthetic_db import ROAD_A, ROAD_B, build_fixture_db
 
 D_MON, D_TUE, D_WED = date(2026, 11, 16), date(2026, 11, 17), date(2026, 11, 18)
 D_SAT, D_SUN = date(2026, 11, 21), date(2026, 11, 22)
@@ -184,18 +187,56 @@ def test_bin_count_rejects_bad_window() -> None:
 def test_max_target_streak_skips_non_service_days() -> None:
     d0 = date(2026, 11, 16)  # 월
     days = [
-        DayRate(d0, True, 48, 48, 1.0),
-        DayRate(d0 + timedelta(days=1), True, 48, 47, 47 / 48),
-        DayRate(d0 + timedelta(days=2), False, 48, 48, None),  # 공휴일: 연속에서 무시
-        DayRate(d0 + timedelta(days=3), True, 48, 48, 1.0),
+        DayRate(d0, None, True, 48, 48, 1.0),
+        DayRate(d0 + timedelta(days=1), None, True, 48, 47, 47 / 48),
+        DayRate(d0 + timedelta(days=2), None, False, 48, 48, None),  # 공휴일: 연속에서 무시
+        DayRate(d0 + timedelta(days=3), None, True, 48, 48, 1.0),
     ]
     assert max_target_streak(days, 0.95) == 3
     # 목표 미달 하루가 연속을 끊는다.
-    days[1] = DayRate(d0 + timedelta(days=1), True, 48, 40, 40 / 48)
+    days[1] = DayRate(d0 + timedelta(days=1), None, True, 48, 40, 40 / 48)
     assert max_target_streak(days, 0.95) == 1
     # 판정 불가(expected 0)도 연속을 끊는다.
-    days[1] = DayRate(d0 + timedelta(days=1), True, 0, 0, None)
+    days[1] = DayRate(d0 + timedelta(days=1), None, True, 0, 0, None)
     assert max_target_streak(days, 0.95) == 1
+
+
+# --- C-01 v1.4 / C-06 v2.3 도로별 성공률 (W-02) ---
+
+
+def test_rate_by_road_counts_only_that_road(fixture_conn_two: sqlite3.Connection) -> None:
+    """road_name을 주면 그 도로의 대상 구간만 분모·분자다(다른 도로는 새지 않는다)."""
+    (a,) = rate(fixture_conn_two, D_MON, D_MON, road_name=ROAD_A)
+    assert (a.road_name, a.expected) == (ROAD_A, 48 * 3)  # S1·S2·S3
+    (b,) = rate(fixture_conn_two, D_MON, D_MON, road_name=ROAD_B)
+    assert (b.road_name, b.expected) == (ROAD_B, 48 * 2)  # W1·W2 (W0은 참고 구간)
+    (all_roads,) = rate(fixture_conn_two, D_MON, D_MON)
+    assert (all_roads.road_name, all_roads.expected) == (None, 48 * 5)  # 전체 대상 구간 합산
+
+
+def test_rate_road_name_unknown_gives_zero_expectation(fixture_conn_two: sqlite3.Connection) -> None:
+    # 없는 도로 이름이면 예외 대신 기대 0 · rate None(0으로 나누지 않는다).
+    (r,) = rate(fixture_conn_two, D_MON, D_MON, road_name="없는도로")
+    assert (r.expected, r.observed, r.rate) == (0, 0, None)
+
+
+def test_rate_none_excludes_non_target_road(tmp_path: Path) -> None:
+    """`second_road_target=False`(target_corridors에 없음)면 W 구간이 합산 분모에 새지 않는다."""
+    db = build_fixture_db(tmp_path / "f.db", second_road=True, second_road_target=False)
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        (r,) = rate(conn, D_MON, D_MON)
+        assert r.expected == 48 * 3  # 합성도로 S1~S3만. W는 is_target=0
+        (w,) = rate(conn, D_MON, D_MON, road_name=ROAD_B)
+        assert (w.expected, w.rate) == (0, None)
+    finally:
+        conn.close()
+
+
+def _seed_one_target_segment(conn: sqlite3.Connection) -> None:
+    _add_segment(conn, "T1")
+    conn.commit()
 
 
 def test_main_reads_readonly_and_prints(
@@ -203,6 +244,7 @@ def test_main_reads_readonly_and_prints(
 ) -> None:
     c = connect(tmp_path / "t.db", create=True)
     init_db(c)
+    _seed_one_target_segment(c)
     c.close()
     seen: dict[str, object] = {}
 
@@ -214,17 +256,73 @@ def test_main_reads_readonly_and_prints(
     assert main(["--days", "3"]) == 0
     out = capsys.readouterr().out
     assert seen == {"readonly": True}  # CLI는 readonly로 연결한다
+    assert "[합성도로]" in out  # 도로별 표 (settings.corridors에 없는 도로도 표에 나온다)
     assert "날짜" in out and "expected" in out
     assert "연속 service day 3일 이상" in out
+
+
+def test_main_prints_table_per_road_in_corridor_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db = build_fixture_db(tmp_path / "two.db", second_road=True)  # 두 도로 모두 대상
+    monkeypatch.setattr(
+        "scripts.collection_rate.connect", lambda *a, **k: connect(db, readonly=True)
+    )
+    assert main(["--days", "2"]) == 0
+    out = capsys.readouterr().out
+    # settings.corridors(창원대로, 원이대로)에 없는 합성 도로는 이름 순으로 뒤에 붙는다.
+    assert out.index("[합성도로]") < out.index("[합성도로B]")
+    assert out.count("연속 service day") == 2  # 연속 판정 줄도 도로별
+
+
+def test_main_shows_only_roads_with_target_segments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 실제 시드: 원이대로는 target_corridors에 없어 is_target=0 → 대상 구간이 없으니 표에 안 나온다.
+    c = connect(tmp_path / "seed.db", create=True)
+    init_db(c)
+    load(c, SEGMENTS, Path(__file__).resolve().parents[2] / "config" / "segment_links.csv")
+    c.close()
+    monkeypatch.setattr(
+        "scripts.collection_rate.connect", lambda *a, **k: connect(tmp_path / "seed.db", readonly=True)
+    )
+    assert main(["--days", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "[창원대로]" in out
+    assert "원이대로" not in out
+    assert out.count("연속 service day") == 1  # 대상 구간이 있는 도로만
+
+
+def test_main_without_target_segments_prints_no_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    c = connect(tmp_path / "t.db", create=True)
+    init_db(c)
+    c.close()
+    monkeypatch.setattr(
+        "scripts.collection_rate.connect", lambda *a, **k: connect(tmp_path / "t.db", readonly=True)
+    )
+    assert main(["--days", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "대상 구간이 없어" in out  # 빈 표를 억지로 그리지 않는다
+    assert "연속 service day" not in out
 
 
 def test_main_prints_to_strict_cp949_stream(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # PowerShell 리디렉션(`| Out-File`)·파이프처럼 표준출력이 cp949(엄격)로 다시 열려도
-    # UnicodeEncodeError로 죽지 않아야 한다 (D-DAT-06). 대상 구간이 없어 rate는 모두 None이다.
+    # UnicodeEncodeError로 죽지 않아야 한다 (D-DAT-06). 모든 날을 공휴일로 두어 rate는 None이다.
     c = connect(tmp_path / "t.db", create=True)
     init_db(c)
+    _seed_one_target_segment(c)
+    today = now_kst().date()
+    for i in range(4):
+        c.execute(
+            "INSERT INTO calendar_info (date, is_holiday) VALUES (?, 1)",
+            ((today - timedelta(days=i)).isoformat(),),
+        )
+    c.commit()
     c.close()
     monkeypatch.setattr(
         "scripts.collection_rate.connect",
