@@ -44,7 +44,7 @@
 | 에이전트 | 모드 | 모델 | 역할 | 수정 가능 경로 (소유) |
 |---|---|---|---|---|
 | `orchestrator` | primary | `claude-agent/opus#high` | 작업 분해·배정, 계약 관리, 통합, 커밋, 문서 갱신 | `docs/**`, `config/**`, `common/**`, `tests/fixtures/**`, `tests/contracts/**`, `tests/integration/**`, `tests/common/**`, `tests/conftest.py`, 루트 문서(`*.md`), 루트 실행 스크립트(`run_*.ps1`), `pyproject.toml`, `requirements*.txt`, `.gitignore`, `.env.example` |
-| `researcher` | subagent | `opencode/longcat-2.5-free` | 외부 사실 조사, 출처 기록, SPEC 변경 제안 | `docs/research/**` |
+| `researcher` | subagent | `opencode/beam-free#high` | 외부 사실 조사, 출처 기록, SPEC 변경 제안 | `docs/research/**` |
 | `dev-collector` | subagent | `opencode/hy4-flash-free#high` | 수집기, 스케줄러 | `collector/**`, `tests/collector/**` |
 | `dev-data` | subagent | `opencode/deepseek-v4.1-flash-free#high` | DB 스키마·저장소, 전처리, DB 스크립트 | `database/**`, `preprocessing/**`, `scripts/**`, `tests/database/**`, `tests/preprocessing/**` |
 | `dev-ml` | subagent | `opencode/deepseek-v4.1-flash-free#max` | 기준 모델, 학습, 예측, 평가 | `prediction/**`, `notebooks/**`, `tests/prediction/**` |
@@ -67,7 +67,7 @@
 
 - `orchestrator` — `claude-agent/opus#high`: 작업 분해, 계약 해석, 통합 판단, 커밋은 **오판 시 되돌리는 비용이 가장 큰** 의사결정이다. 하위 모델이 계약을 잘못 해석하거나 소유권을 침범하면 전체 슬라이스가 흔들리므로, 최상위 추론 모델을 쓰고 variant는 `high`로 둔다(최대 추론 `max`는 지연이 커서 대화형 조율에 불리).
 - `reviewer` — `opencode/deepseek-v4.1-flash-free#max`: 코드 판독과 불변식 위반 판단은 **출력물 생성이 아니라 추론**이 핵심이다. 대화형 응답이 아니므로 강도를 `max`로 올려 오탐·누락을 줄인다. 코딩 계열 모델이라 코드 문맥 해석이 안정적이다.
-- `researcher` — `opencode/longcat-2.5-free`: 웹 문서와 API 스키마를 길게 읽고 요약해야 해 **긴 컨텍스트**가 유리하고, zero-retention 정책이라 리서치 프롬프트에 외부 자료를 넣어도 보존 위험이 낮다. 무료 한도가 낮아(요청/일 제한) 제한 시 `nvidia/z-ai/glm-5.3-flash#thinking`로 대체한다.
+- `researcher` — `opencode/beam-free#high`: 웹 문서와 API 스키마를 길게 읽고 요약해야 해 **1M 토큰 컨텍스트**가 유리하고, 학습에는 쓰지 않아 리서치 프롬프트에 외부 자료를 넣어도 보존 위험이 낮다(30일 보관). `webfetch`·`websearch`를 반복 호출하므로 **tool strict 지원** 모델을 골랐고, 사실·추론 구분 같은 판단이 들어가므로 variant는 `high`로 추론 여력을 준다. (구 모델 `opencode/longcat-2.5-free`는 2026-11-23 카탈로그에서 삭제되어 교체했다.) 한도·429로 실패하면 `nvidia/z-ai/glm-5.3-flash#thinking`로 대체한다.
 - `dev-data` — `opencode/deepseek-v4.1-flash-free#high`: SQL 집계, 70% 관측 규칙, forward fill, as-of 조인처럼 **규칙을 정확히 구현**해야 하고 오류가 조용히 데이터를 오염시킨다. 구현 정확도 우선으로 `high`를 쓴다.
 - `dev-ml` — `opencode/deepseek-v4.1-flash-free#max`: 수식·학습 파이프라인·walk-forward 평가는 **논리 오류의 발견 비용이 가장 큰** 영역이다. dev-data와 같은 계열을 쓰되 강도를 `max`로 올려, 모델 종류를 늘리지 않고 추론 여력을 확보한다.
 - `dev-collector` — `opencode/hy4-flash-free#high`: 외부 API 어댑터·재시도·로깅은 패턴이 반복되는 작업이라 고속 모델로 충분하고, 수집은 주기적으로 자주 실행되므로 응답 속도가 처리량에 직결된다.

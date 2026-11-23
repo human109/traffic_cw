@@ -122,7 +122,7 @@ OpenCode V2에는 에이전트별 자동 fallback(우선순위 목록) 기능이
 | 에이전트 | 기본 모델 | 제한 시 대체 모델 |
 |---|---|---|
 | `reviewer` | `opencode/deepseek-v4.1-flash-free#max` | `nvidia/z-ai/glm-5.3-flash#thinking` |
-| `researcher` | `opencode/longcat-2.5-free` | `nvidia/z-ai/glm-5.3-flash#thinking` |
+| `researcher` | `opencode/beam-free#high` | `nvidia/z-ai/glm-5.3-flash#thinking` |
 | `dev-collector` | `opencode/hy4-flash-free#high` | `nvidia/z-ai/glm-5.3-flash#thinking` |
 | `dev-data` | `opencode/deepseek-v4.1-flash-free#high` | `nvidia/z-ai/glm-5.3-flash#thinking` |
 | `dev-ml` | `opencode/deepseek-v4.1-flash-free#max` | `nvidia/z-ai/glm-5.3-flash#thinking` |
