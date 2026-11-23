@@ -6,13 +6,13 @@ import gzip
 import shutil
 import sqlite3
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
 
 from collector import maintenance
-from collector.maintenance import prune_raw, purge_outside_scope, store_scope_link_ids
+from collector.maintenance import prune_raw, purge_outside_scope, reload_raw, store_scope_link_ids
 from common.timeutil import KST
 from config.settings import Settings
 
@@ -233,6 +233,294 @@ def test_purge_drop_failure_does_not_mask_original_error(
         purge_outside_scope(_BrokenDropConn(), {"SYN0000001"}, dry_run=False, now=NOW)  # type: ignore[arg-type]
     assert "임시 테이블 정리 실패" in caplog.text  # DROP 실패는 경고일 뿐이다
     assert _links(fixture_conn) == before  # rollback됐다
+
+
+# --- reload_raw (W-03 Task 2) ---
+
+
+def _reload_settings() -> Settings:
+    """상대 raw_dir("data/raw") — 테스트에서 paths.ROOT를 tmp로 바꿔 루트 기준 상대 경로를 검증한다."""
+    return replace(Settings(), raw_dir="data/raw")
+
+
+def _its_xml(items: list[tuple[str, str, str, str]]) -> bytes:
+    """synthetic: (linkId, roadName, speed, createdDate) → ITS 응답."""
+    body = "".join(
+        f"<item><roadName>{road}</roadName><linkId>{lid}</linkId><speed>{speed}</speed>"
+        f"<createdDate>{cd}</createdDate></item>"
+        for lid, road, speed, cd in items
+    )
+    return (
+        "<response><header><resultCode>0</resultCode><resultMsg>SUCCESS</resultMsg></header>"
+        f"<body><totalCount>{len(items)}</totalCount><items>{body}</items></body></response>"
+    ).encode("utf-8")
+
+
+def _gz_file(raw_dir: Path, date_str: str, time_str: str, xml: bytes) -> Path:
+    d = raw_dir / "its" / date_str
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"{time_str}.xml.gz"
+    p.write_bytes(gzip.compress(xml))
+    return p
+
+
+def test_reload_raw_inserts_selected_roads(tmp_path: Path, fixture_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """원본 2개 파일에서 지정 도로(원이대로) item만 넣는다. collected_at은 파일 시각(초 포함),
+    raw_file은 루트 기준 상대 경로, source_timestamp는 원본 값이다 (C-02 v2.2)."""
+    from collector import paths
+
+    fake_root = tmp_path / "repo"
+    monkeypatch.setattr(paths, "ROOT", fake_root)
+    raw = fake_root / "data" / "raw"
+    xml_a = _its_xml([
+        ("SYN0000001", "창원대로", "50.0", "20261120103001"),
+        ("SYN0000901", "원이대로", "60.0", "20261120103001"),
+        ("SYN0000902", "기타도로", "70.0", "20261120103001"),
+    ])
+    xml_b = _its_xml([
+        ("SYN0000901", "원이대로", "55.0", "20261121080001"),
+        ("SYN0000002", "창원대로", "45.0", "20261121080001"),
+    ])
+    _gz_file(raw, "20261120", "103030", xml_a)
+    _gz_file(raw, "20261121", "080015", xml_b)
+
+    conn = sqlite3.connect(fixture_db)
+    conn.row_factory = sqlite3.Row
+    n = reload_raw(
+        date(2026, 11, 20), date(2026, 11, 21), ["원이대로"], conn=conn, settings=_reload_settings(), dry_run=False
+    )
+    assert n == 2
+    rows = conn.execute(
+        "SELECT link_id, source_timestamp, collected_at, speed, raw_file FROM traffic_observation"
+        " WHERE source = 'its' ORDER BY source_timestamp"
+    ).fetchall()
+    assert len(rows) == 2
+    first, second = rows
+    assert first["link_id"] == "SYN0000901"
+    assert first["source_timestamp"] == "2026-11-20T10:30:01+09:00"  # 원본 createdDate 그대로
+    assert first["collected_at"] == "2026-11-20T10:30:30+09:00"  # 파일 이름 시각(초 포함), 실행 시각 아님
+    assert first["speed"] == 60.0
+    assert not Path(first["raw_file"]).is_absolute()
+    assert first["raw_file"] == str(Path("data/raw/its/20261120/103030.xml.gz"))
+    assert (fake_root / first["raw_file"]).exists()
+    assert second["collected_at"] == "2026-11-21T08:00:15+09:00"
+    assert second["raw_file"] == str(Path("data/raw/its/20261121/080015.xml.gz"))
+
+    # 지정 도로 외 item(창원대로·기타도로)은 넣지 않는다
+    others = conn.execute(
+        "SELECT COUNT(*) FROM traffic_observation"
+        " WHERE source = 'its' AND link_id IN ('SYN0000001','SYN0000002','SYN0000902')"
+    ).fetchone()[0]
+    assert others == 0
+    # collection_log에는 쓰지 않는다
+    assert conn.execute("SELECT COUNT(*) FROM collection_log").fetchone()[0] == 0
+    conn.close()
+
+
+def test_reload_raw_second_run_inserts_nothing(tmp_path: Path, fixture_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """같은 범위를 두 번 실행하면 UNIQUE(source, link_id, source_timestamp)로 무시해 0을 반환한다."""
+    from collector import paths
+
+    monkeypatch.setattr(paths, "ROOT", tmp_path / "repo")
+    raw = tmp_path / "repo" / "data" / "raw"
+    _gz_file(raw, "20261120", "103030", _its_xml([("SYN0000901", "원이대로", "60.0", "20261120103001")]))
+
+    conn = sqlite3.connect(fixture_db)
+    args = (date(2026, 11, 20), date(2026, 11, 20), ["원이대로"])
+    assert reload_raw(*args, conn=conn, settings=_reload_settings(), dry_run=False) == 1
+    assert reload_raw(*args, conn=conn, settings=_reload_settings(), dry_run=False) == 0
+    assert conn.execute("SELECT COUNT(*) FROM traffic_observation WHERE source='its'").fetchone()[0] == 1
+    conn.close()
+
+
+def test_reload_raw_dry_run_counts_missing_only(
+    tmp_path: Path, fixture_db: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """dry-run은 아무것도 넣지 않고 아직 없는 키 수만 반환한다."""
+    from collector import paths
+
+    monkeypatch.setattr(paths, "ROOT", tmp_path / "repo")
+    raw = tmp_path / "repo" / "data" / "raw"
+    _gz_file(raw, "20261120", "103030", _its_xml([
+        ("SYN0000901", "원이대로", "60.0", "20261120103001"),
+        ("SYN0000903", "원이대로", "62.0", "20261120103001"),
+    ]))
+
+    conn = sqlite3.connect(fixture_db)
+    # SYN0000901 키는 이미 DB에 있다고 치고 직접 넣는다.
+    conn.execute(
+        "INSERT INTO traffic_observation (source, link_id, source_timestamp, collected_at, speed)"
+        " VALUES ('its', 'SYN0000901', '2026-11-20T10:30:01+09:00', '2026-11-20T10:30:30+09:00', 1.0)"
+    )
+    conn.commit()
+    before = conn.execute("SELECT COUNT(*) FROM traffic_observation WHERE source='its'").fetchone()[0]
+
+    n = reload_raw(date(2026, 11, 20), date(2026, 11, 20), ["원이대로"], conn=conn, settings=_reload_settings())
+    assert n == 1  # 아직 없는 키(SYN0000903)만 예정
+    after = conn.execute("SELECT COUNT(*) FROM traffic_observation WHERE source='its'").fetchone()[0]
+    assert after == before  # 무삽입
+    assert conn.execute("SELECT COUNT(*) FROM collection_log").fetchone()[0] == 0
+    conn.close()
+
+
+def test_reload_raw_skips_broken_files(
+    tmp_path: Path, fixture_db: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """깨진 gz·깨진 XML·resultCode 오류 응답은 경고 후 건너뛰고 나머지는 계속 넣는다."""
+    from collector import paths
+
+    monkeypatch.setattr(paths, "ROOT", tmp_path / "repo")
+    raw = tmp_path / "repo" / "data" / "raw"
+    _gz_file(raw, "20261120", "103030", _its_xml([("SYN0000901", "원이대로", "60.0", "20261120103001")]))
+    broken_gz = raw / "its" / "20261120" / "103100.xml.gz"
+    broken_gz.write_bytes(b"\x00not-gzip")  # gzip이 아니다
+    _gz_file(raw, "20261120", "103200", b"<response><broken")  # gzip이지만 XML이 아니다
+    _gz_file(raw, "20261120", "103300", _its_xml([]).replace(b"<resultCode>0", b"<resultCode>99"))  # resultCode 오류
+    _gz_file(raw, "20261120", "103400", _its_xml([("SYN0000903", "원이대로", "62.0", "20261120103401")]))
+
+    conn = sqlite3.connect(fixture_db)
+    n = reload_raw(
+        date(2026, 11, 20), date(2026, 11, 20), ["원이대로"], conn=conn, settings=_reload_settings(), dry_run=False
+    )
+    assert n == 2  # 정상 파일만
+    ids = {r[0] for r in conn.execute("SELECT link_id FROM traffic_observation WHERE source='its'")}
+    assert ids == {"SYN0000901", "SYN0000903"}
+    assert "건너뛴다" in caplog.text
+    conn.close()
+
+
+def test_reload_raw_skips_truncated_gz(
+    tmp_path: Path, fixture_db: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """W-03 리뷰 1: 절단된 gz(정상 바이트를 중간에서 자름)는 경고 후 건너뛰고 나머지는 들어간다."""
+    from collector import paths
+
+    monkeypatch.setattr(paths, "ROOT", tmp_path / "repo")
+    raw = tmp_path / "repo" / "data" / "raw"
+    _gz_file(raw, "20261120", "103030", _its_xml([("SYN0000901", "원이대로", "60.0", "20261120103001")]))
+    full = gzip.compress(_its_xml([("SYN0000903", "원이대로", "62.0", "20261120103201")]))
+    truncated = raw / "its" / "20261120" / "103200.xml.gz"
+    truncated.write_bytes(full[: len(full) // 2])  # 정상 gz 바이트를 중간에서 자른다
+    _gz_file(raw, "20261120", "103400", _its_xml([("SYN0000905", "원이대로", "64.0", "20261120103401")]))
+
+    conn = sqlite3.connect(fixture_db)
+    n = reload_raw(
+        date(2026, 11, 20), date(2026, 11, 20), ["원이대로"], conn=conn, settings=_reload_settings(), dry_run=False
+    )
+    assert n == 2  # 절단 파일만 빼고 나머지는 들어간다
+    ids = {r[0] for r in conn.execute("SELECT link_id FROM traffic_observation WHERE source='its'")}
+    assert ids == {"SYN0000901", "SYN0000905"}
+    assert "건너뛴다" in caplog.text
+    conn.close()
+
+
+def test_reload_raw_skips_corrupted_stream(
+    tmp_path: Path, fixture_db: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """W-03 리뷰 1: deflate 스트림이 손상된 gz도 건너뛰고 나머지는 들어간다."""
+    from collector import paths
+
+    monkeypatch.setattr(paths, "ROOT", tmp_path / "repo")
+    raw = tmp_path / "repo" / "data" / "raw"
+    _gz_file(raw, "20261120", "103030", _its_xml([("SYN0000901", "원이대로", "60.0", "20261120103001")]))
+    bad = bytearray(gzip.compress(_its_xml([("SYN0000903", "원이대로", "62.0", "20261120103201")])))
+    bad[len(bad) // 2] ^= 0xFF  # deflate 데이터 한 바이트를 뒤집는다
+    corrupted = raw / "its" / "20261120" / "103200.xml.gz"
+    corrupted.write_bytes(bytes(bad))
+    _gz_file(raw, "20261120", "103400", _its_xml([("SYN0000905", "원이대로", "64.0", "20261120103401")]))
+
+    conn = sqlite3.connect(fixture_db)
+    n = reload_raw(
+        date(2026, 11, 20), date(2026, 11, 20), ["원이대로"], conn=conn, settings=_reload_settings(), dry_run=False
+    )
+    assert n == 2
+    ids = {r[0] for r in conn.execute("SELECT link_id FROM traffic_observation WHERE source='its'")}
+    assert ids == {"SYN0000901", "SYN0000905"}
+    assert "건너뛴다" in caplog.text
+    conn.close()
+
+
+def test_reload_raw_dry_run_leaves_no_open_transaction(
+    tmp_path: Path, fixture_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """W-03 리뷰 2: dry-run은 rollback으로 마쳐 호출자 conn에 암시 트랜잭션을 남기지 않는다."""
+    from collector import paths
+
+    monkeypatch.setattr(paths, "ROOT", tmp_path / "repo")
+    raw = tmp_path / "repo" / "data" / "raw"
+    _gz_file(raw, "20261120", "103030", _its_xml([("SYN0000901", "원이대로", "60.0", "20261120103001")]))
+
+    conn = sqlite3.connect(fixture_db)
+    n = reload_raw(date(2026, 11, 20), date(2026, 11, 20), ["원이대로"], conn=conn, settings=_reload_settings())
+    assert n == 1
+    assert conn.in_transaction is False
+    conn.close()
+
+
+def test_reload_raw_ignores_out_of_range_dates(tmp_path: Path, fixture_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """범위 밖 날짜 폴더는 무시한다(양끝 날짜는 포함)."""
+    from collector import paths
+
+    monkeypatch.setattr(paths, "ROOT", tmp_path / "repo")
+    raw = tmp_path / "repo" / "data" / "raw"
+    _gz_file(raw, "20261119", "103030", _its_xml([("SYN0000901", "원이대로", "50.0", "20261119103001")]))
+    _gz_file(raw, "20261120", "103030", _its_xml([("SYN0000901", "원이대로", "60.0", "20261120103001")]))
+    _gz_file(raw, "20261122", "103030", _its_xml([("SYN0000901", "원이대로", "70.0", "20261122103001")]))
+
+    conn = sqlite3.connect(fixture_db)
+    conn.row_factory = sqlite3.Row
+    n = reload_raw(
+        date(2026, 11, 20), date(2026, 11, 21), ["원이대로"], conn=conn, settings=_reload_settings(), dry_run=False
+    )
+    assert n == 1
+    rows = conn.execute("SELECT collected_at FROM traffic_observation WHERE source='its'").fetchall()
+    assert [r["collected_at"] for r in rows] == ["2026-11-20T10:30:30+09:00"]
+    conn.close()
+
+
+def test_reload_raw_cli(tmp_path: Path, fixture_db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """CLI: 기본 dry-run(무삽입·예정 수), --apply 삽입. 넣을/넣은 행 수와 파일 수를 출력한다."""
+    from collector import paths
+
+    fake_root = tmp_path / "repo"
+    monkeypatch.setattr(paths, "ROOT", fake_root)
+    _gz_file(fake_root / "data" / "raw", "20261120", "103030", _its_xml([
+        ("SYN0000901", "원이대로", "60.0", "20261120103001"),
+        ("SYN0000903", "원이대로", "62.0", "20261120103001"),
+    ]))
+    monkeypatch.setattr("config.settings.get_settings", lambda: _reload_settings())
+
+    def fake_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        return sqlite3.connect(fixture_db)
+
+    monkeypatch.setattr("database.db.connect", fake_connect)
+    argv = ["reload-raw", "--from", "2026-11-20", "--to", "2026-11-20", "--road", "원이대로"]
+
+    assert maintenance.main(argv) == 0  # 기본 dry-run
+    out = capsys.readouterr().out
+    assert "dry-run" in out and "2" in out and "1" in out  # 넣을 행 2, 파일 1
+    assert "백업은 자동이 아니다" in out  # W-03 리뷰 3: apply 유무와 무관하게 안내
+    assert "몇 분" in out  # 전체 파일 파싱 비용 안내
+    c = sqlite3.connect(fixture_db)
+    assert c.execute("SELECT COUNT(*) FROM traffic_observation WHERE source='its'").fetchone()[0] == 0
+    c.close()
+
+    assert maintenance.main([*argv, "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "적용" in out
+    c = sqlite3.connect(fixture_db)
+    assert c.execute("SELECT COUNT(*) FROM traffic_observation WHERE source='its'").fetchone()[0] == 2
+    c.close()
+
+
+def test_reload_raw_rejects_bad_arguments(tmp_path: Path, fixture_db: Path) -> None:
+    """뒤집힌 날짜 범위·빈 도로 목록은 ValueError다."""
+    conn = sqlite3.connect(fixture_db)
+    with pytest.raises(ValueError):
+        reload_raw(date(2026, 11, 21), date(2026, 11, 20), ["원이대로"], conn=conn, settings=_reload_settings())
+    with pytest.raises(ValueError):
+        reload_raw(date(2026, 11, 20), date(2026, 11, 21), [], conn=conn, settings=_reload_settings())
+    conn.close()
 
 
 # --- prune_raw (D-COL-06) ---

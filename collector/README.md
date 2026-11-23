@@ -34,8 +34,26 @@
 | `base.py` | `FetchResult`, `SourceAdapter` 프로토콜 — 수집원을 추가할 때 구현할 인터페이스 |
 | `its.py` | ITS 요청 파라미터, tenacity 재시도, XML 파싱, `quality_flag` 판정, 키 가리기 |
 | `store.py` | 원본 파일·관측·로그 저장 (commit하지 않음) |
-| `maintenance.py` | 정비 도구 2가지(기본 dry-run, `--apply`로 실행). `purge --raw <gz>`: 저장 범위 밖 관측 행 정리+VACUUM. `--raw`에는 저장 범위 링크를 뽑을 최근 ITS 원본(예: `data/raw/its/<YYYYMMDD>/<HHMMSS>.xml.gz`)을 넘긴다. DB 백업은 자동이 아니므로 `--apply` 전에 수동 백업하고, `--apply` 시 대상 DB 절대 경로를 출력한다. `prune-raw`: `raw_keep_days`(기본 30일)보다 오래된 원본 날짜 폴더 정리. 날짜가 아닌 폴더·오늘·어제는 항상 보존하고, 한 폴더 삭제가 실패해도 나머지를 계속 지운다 |
+| `maintenance.py` | 정비 도구 3가지(기본 dry-run, `--apply`로 실행). `purge --raw <gz>`: 저장 범위 밖 관측 행 정리+VACUUM. `--raw`에는 저장 범위 링크를 뽑을 최근 ITS 원본(예: `data/raw/its/<YYYYMMDD>/<HHMMSS>.xml.gz`)을 넘긴다. DB 백업은 자동이 아니므로 `--apply` 전에 수동 백업하고, `--apply` 시 대상 DB 절대 경로를 출력한다. `prune-raw`: `raw_keep_days`(기본 30일)보다 오래된 원본 날짜 폴더 정리. 날짜가 아닌 폴더·오늘·어제는 항상 보존하고, 한 폴더 삭제가 실패해도 나머지를 계속 지운다. `reload-raw`: 원본 gz에서 지정 도로 관측 재적재(아래 절) |
 | `scheduler.py` | 파이프라인 collect → preprocess → backfill → predict. `python -m collector.scheduler --once`로 1회, 인자 없이 상주(매 5분 30초, KST). 예정 시각보다 `scheduler_misfire_grace_s`(60초) 넘게 늦으면 그 회차는 건너뛴다. `--evaluate`로 평가 1회, `--maintenance`로 운영 작업 1회 실행. 상주 시 job 3개: 파이프라인, 평가(매일 `eval_cron_hour:eval_cron_minute`, 기본 10:05), 운영(매일 `backup_cron_hour`시, 기본 03:00 — DB 백업 후 원본 정리). `--once --evaluate`, `--once --maintenance` 조합에서 파이프라인에 실패 단계가 있으면 평가·운영 작업은 건너뛰어진다 |
+
+## 원본 재적재 (`reload-raw`, W-03)
+
+저장 범위 밖 도로는 원본 파일에만 남는다. 나중에 도로를 추가했을 때 원본에서 관측을 다시 넣는다.
+
+```
+python -m collector.maintenance reload-raw --from 2026-11-19 --to 2026-11-24 --road 원이대로 [--apply]
+```
+
+`--road`는 반복 지정할 수 있고, 기본은 dry-run(넣을 행 수와 읽은 파일 수 출력)이며 `--apply`에 넣는다.
+DB 백업은 자동이 아니므로 `--apply` 전에 수동으로 백업한다(CLI가 안내를 출력한다). dry-run과 apply는
+각각 범위 내 모든 파일을 파싱하므로 몇 분 걸릴 수 있다.
+
+- `raw_dir/its/<YYYYMMDD>/<HHMMSS>.xml.gz`를 날짜 양끝 포함해 날짜순으로 읽는다. 파싱·quality_flag 규칙은 수집기와 같다(ITS 어댑터 재사용, 새로 파싱하지 않는다).
+- `collected_at`은 **파일 이름의 수집 시각**(KST, 초 포함)이다 — 재적재 실행 시각을 쓰면 as-of 규칙(미래 정보 금지)이 깨진다. `source_timestamp`는 원본 `createdDate`, `raw_file`은 그 원본의 루트 기준 상대 경로.
+- 지정 도로(`roadName`) item만 넣는다. 같은 (source, link_id, source_timestamp)는 무시(INSERT OR IGNORE), 한 트랜잭션, `collection_log`에 쓰지 않는다.
+- 깨진 gz·XML·resultCode 오류 응답은 경고 후 건너뛰고 나머지를 계속 넣는다. 파일 이름이 HHMMSS.xml.gz 형식이 아니어도 건너뛴다.
+- 같은 키가 여러 파일에 있으면 첫 파일(시간순)의 값 하나만 들어간다.
 
 ## 파이프라인 as-of 시각 (D-COL-08)
 

@@ -1,10 +1,11 @@
-"""수집기 정비 도구 (D-COL-05, D-COL-06). 실행:
-`python -m collector.maintenance purge --raw <gz> [--apply]` · `python -m collector.maintenance prune-raw [--apply]`.
+"""수집기 정비 도구 (D-COL-05, D-COL-06, W-03). 실행:
+`purge --raw <gz> [--apply]` · `prune-raw [--apply]` · `reload-raw --from <날짜> --to <날짜> --road <도로> [--apply]`.
 
-`purge`: C-02 v2 저장 범위(창원대로) 이전에 쌓인 범위 밖 관측 행을 정리한다. `traffic_observation` 외의
+`purge`: C-02 v2 저장 범위 이전에 쌓인 범위 밖 관측 행을 정리한다. `traffic_observation` 외의
 테이블은 건드리지 않는다. 기본은 dry-run(숫자만 출력)이고 `--apply`일 때만 삭제 후 VACUUM한다.
 DB 백업은 자동이 아니므로 `--apply` 전에 수동으로 백업해야 한다.
 `prune-raw`: `raw_keep_days`보다 오래된 원본 날짜 폴더를 정리한다(C-06 v2.2). 기본 dry-run, `--apply`로 삭제.
+`reload-raw`: 보관 중인 원본 gz에서 지정 도로 관측을 다시 넣는다(C-06 v2.3, C-02 v2.2). 기본 dry-run, `--apply`로 삽입.
 """
 
 from __future__ import annotations
@@ -15,19 +16,27 @@ import re
 import shutil
 import sqlite3
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+import zlib
+from collections.abc import Sequence
+from dataclasses import replace
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from collector.its import ItsAdapter
 from collector.paths import resolve_path
 from collector.runner import _target_links
+from collector.store import insert_observations, raw_file_ref
 from common.logsetup import get_logger
-from common.timeutil import now_kst, require_aware
+from common.records import ObservationRecord
+from common.timeutil import now_kst, parse_compact_kst, require_aware, to_iso
 from config.settings import Settings
 
 log = get_logger(__name__)
 
 _KEEP_TABLE = "temp._purge_keep"
+_RELOAD_TABLE = "temp._reload_keys"
 _DATE_DIR_RE = re.compile(r"\d{8}")
+_TIME_FILE_RE = re.compile(r"\d{6}")
 
 
 def store_scope_link_ids(raw_file: Path, settings: Settings) -> set[str]:
@@ -160,8 +169,154 @@ def prune_raw(now: datetime, settings: Settings | None = None, *, dry_run: bool 
     return files
 
 
+def _scan_raw(
+    start: date, end: date, roads: set[str], settings: Settings
+) -> tuple[list[ObservationRecord], int]:
+    """원본 gz를 날짜순으로 읽어 지정 도로 후보 레코드와 읽은 파일 수를 돌려준다.
+
+    파싱·quality_flag 규칙은 기존 ITS 어댑터를 재사용한다. 깨진 gz·XML은 경고 후 건너뛴다.
+    `collected_at`은 파일 이름의 수집 시각(KST, 초 포함)이다 — 재적재 실행 시각을 쓰면
+    as-of 규칙(미래 정보 금지)이 깨진다(C-02 v2.2).
+    """
+    adapter = ItsAdapter(settings)
+    raw_dir = resolve_path(settings.raw_dir) / "its"
+    records: list[ObservationRecord] = []
+    files = 0
+    d = start
+    while d <= end:
+        day_dir = raw_dir / d.strftime("%Y%m%d")
+        if day_dir.is_dir():
+            for path in sorted(day_dir.glob("*.xml.gz")):
+                if _TIME_FILE_RE.fullmatch(path.name.removesuffix(".xml.gz")) is None:
+                    log.warning("reload-raw: 파일 이름이 HHMMSS.xml.gz 형식이 아니어서 건너뛴다: %s", path)
+                    continue
+                try:
+                    body = gzip.decompress(path.read_bytes())
+                    file_time = parse_compact_kst(d.strftime("%Y%m%d") + path.name[:6])
+                    parsed = adapter.parse(body, file_time)
+                except (OSError, EOFError, ValueError, zlib.error) as e:
+                    # 절단 gz(EOFError)·손상 deflate(zlib.error)·헤더 손상(BadGzipFile=OSError)·XML 오류(ValueError)
+                    log.warning("reload-raw: 원본을 읽지 못해 건너뛴다: %s: %s", path, e)
+                    continue
+                files += 1
+                ref = raw_file_ref(path)
+                records.extend(replace(r, raw_file=ref) for r in parsed if r.road_name in roads)
+        d += timedelta(days=1)
+    return records, files
+
+
+def _count_missing_keys(conn: sqlite3.Connection, records: list[ObservationRecord]) -> int:
+    """아직 `traffic_observation`에 없는 (source, link_id, source_timestamp) 키 수."""
+    if not records:
+        return 0
+    keys = {(r.source, r.link_id, to_iso(r.source_timestamp)) for r in records}
+    conn.execute(f"CREATE TEMP TABLE IF NOT EXISTS {_RELOAD_TABLE} (source TEXT, link_id TEXT, source_timestamp TEXT)")
+    conn.execute(f"DELETE FROM {_RELOAD_TABLE}")
+    conn.executemany(
+        f"INSERT INTO {_RELOAD_TABLE} (source, link_id, source_timestamp) VALUES (?, ?, ?)",
+        sorted(keys),
+    )
+    try:
+        return conn.execute(
+            f"SELECT COUNT(*) FROM {_RELOAD_TABLE} k WHERE NOT EXISTS ("
+            " SELECT 1 FROM traffic_observation t WHERE t.source = k.source"
+            "   AND t.link_id = k.link_id AND t.source_timestamp = k.source_timestamp)"
+        ).fetchone()[0]
+    finally:
+        try:
+            conn.execute(f"DROP TABLE IF EXISTS {_RELOAD_TABLE}")
+        except Exception as e:  # 임시 테이블 정리 실패가 원래 값을 가리지 않게 한다
+            log.warning("reload-raw: 임시 테이블 정리 실패: %s", e)
+
+
+def reload_raw(
+    start: date,
+    end: date,
+    road_names: Sequence[str],
+    conn: sqlite3.Connection | None = None,
+    settings: Settings | None = None,
+    *,
+    dry_run: bool = True,
+) -> int:
+    """보관 중인 원본 gz에서 지정 도로 관측을 다시 `traffic_observation`에 넣는다 (C-06 v2.3, C-02 v2.2).
+
+    - `raw_dir/its/<YYYYMMDD>/<HHMMSS>.xml.gz`를 날짜 양끝을 포함해 날짜순으로 읽는다.
+    - `collected_at`은 파일 이름의 수집 시각(KST, 초 포함)이다. `source_timestamp`는 원본 값,
+      `raw_file`은 그 원본의 저장소 루트 기준 상대 경로다.
+    - 파싱·quality_flag 규칙은 기존 ITS 어댑터를 재사용한다. 지정 도로(`roadName`) item만 넣는다.
+    - `INSERT OR IGNORE`(UNIQUE source, link_id, source_timestamp), 한 트랜잭션. `collection_log`는
+      쓰지 않는다. 깨진 gz·XML은 경고 로그를 남기고 건너뛴다(나머지는 계속).
+    - `dry_run=True`(기본)이면 아무것도 넣지 않고 넣을(아직 없는 키) 행 수를 반환한다.
+    - 반환: 넣었거나(apply) 넣을(dry-run) 행 수.
+    - `start > end`이거나 `road_names`가 비어 있으면 `ValueError`.
+    주의: 끝에서 apply는 commit, dry-run은 rollback하므로 호출 전 conn의 미커밋 변경도 함께 확정·취소된다.
+    """
+    rows, _files = _reload_raw(start, end, road_names, conn=conn, settings=settings, dry_run=dry_run)
+    return rows
+
+
+def _reload_raw(
+    start: date,
+    end: date,
+    road_names: Sequence[str],
+    conn: sqlite3.Connection | None = None,
+    settings: Settings | None = None,
+    *,
+    dry_run: bool = True,
+) -> tuple[int, int]:
+    """`reload_raw`의 본문. (행 수, 읽은 파일 수)를 돌려준다. CLI가 파일 수도 출력하기 위해 둔다."""
+    if end < start:
+        raise ValueError(f"날짜 범위가 올바르지 않다: {end} < {start}")
+    roads = set(road_names)
+    if not roads:
+        raise ValueError("road_names가 비어 있다. 넣을 도로를 지정해야 한다")
+    if settings is None:
+        from config.settings import get_settings
+
+        settings = get_settings()
+    candidates, files = _scan_raw(start, end, roads, settings)
+    # 같은 (source, link_id, source_timestamp)가 여러 파일에 있으면 첫 파일(시간순)만 남긴다.
+    deduped: dict[tuple[str, str, str], ObservationRecord] = {}
+    for r in candidates:
+        deduped.setdefault((r.source, r.link_id, to_iso(r.source_timestamp)), r)
+    batch = list(deduped.values())
+
+    own_conn = conn is None
+    if conn is None:
+        from database.db import connect  # C-06
+
+        conn = connect()
+    mode = "dry-run" if dry_run else "apply"
+    try:
+        if dry_run:
+            rows = _count_missing_keys(conn, batch)
+            conn.rollback()  # 임시 테이블 DML이 연 암시 트랜잭션을 닫는다(purge dry-run과 같다)
+        else:
+            rows = insert_observations(conn, batch)
+            conn.commit()
+        log.info(
+            "reload-raw %s: 파일 %d개, 후보 %d행, %s %d행 (%s ~ %s, 도로 %s)",
+            mode, files, len(batch), "넣을" if dry_run else "넣음", rows, start, end, sorted(roads),
+        )
+        return rows, files
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def _iso_date(text: str) -> date:
+    """CLI `--from`/`--to` 변환. YYYY-MM-DD가 아니면 argparse가 사용자에게 알린다."""
+    try:
+        return date.fromisoformat(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"YYYY-MM-DD 형식이어야 한다: {text}") from e
+
+
 def main(argv: list[str] | None = None) -> int:
-    """`purge --raw <gz> [--apply]` · `prune-raw [--apply]`. 기본은 dry-run으로 숫자만 출력한다."""
+    """`purge --raw <gz> [--apply]` · `prune-raw [--apply]` · `reload-raw --from <날짜> --to <날짜> --road <도로> [--apply]`.
+
+    기본은 dry-run으로 숫자만 출력한다.
+    """
     parser = argparse.ArgumentParser(prog="python -m collector.maintenance", description="수집기 정비 도구")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("purge", help="저장 범위 밖 관측 행 정리")
@@ -169,6 +324,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--apply", action="store_true", help="실제로 삭제하고 VACUUM한다(없으면 dry-run)")
     pr = sub.add_parser("prune-raw", help="오래된 원본 날짜 폴더 정리 (raw_keep_days)")
     pr.add_argument("--apply", action="store_true", help="실제로 삭제한다(없으면 dry-run)")
+    rr = sub.add_parser("reload-raw", help="원본 gz에서 지정 도로 관측 재적재 (C-02 v2.2)")
+    rr.add_argument("--from", dest="from_", type=_iso_date, required=True, metavar="YYYY-MM-DD", help="시작 날짜(포함)")
+    rr.add_argument("--to", dest="to_", type=_iso_date, required=True, metavar="YYYY-MM-DD", help="끝 날짜(포함)")
+    rr.add_argument("--road", dest="roads", action="append", required=True, help="넣을 도로(ITS roadName). 반복 지정 가능")
+    rr.add_argument("--apply", action="store_true", help="실제로 넣는다(없으면 dry-run)")
     args = parser.parse_args(argv)
 
     from config.settings import get_settings
@@ -178,6 +338,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "prune-raw":
         files = prune_raw(now_kst(), settings, dry_run=not args.apply)
         print(f"{'적용' if args.apply else 'dry-run'}: 파일 {files}개")
+        return 0
+
+    if args.command == "reload-raw":
+        print("주의: DB 백업은 자동이 아니다. --apply 전에 DB 파일을 수동으로 백업하라.")
+        print("dry-run과 apply는 각각 범위 내 모든 파일을 파싱하므로 몇 분 걸릴 수 있다.")
+        rows, files = _reload_raw(args.from_, args.to_, args.roads, settings=settings, dry_run=not args.apply)
+        print(f"{'적용' if args.apply else 'dry-run'}: 파일 {files}개, {'넣은' if args.apply else '넣을'} 행 {rows}개")
         return 0
 
     from database.db import connect  # C-06
