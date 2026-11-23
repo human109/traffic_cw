@@ -13,6 +13,9 @@
 | `baseline_dow_mean` | `available_at ≤ now` 과거 데이터에서 target_time과 같은 요일·같은 HH:MM bin의 speed 평균(`imputed` 제외). 조회 범위는 `base_time − dow_mean_lookback_weeks`(기본 8주, `config/settings.py`) 이상 `base_time` 이하(경계 포함) | 값이 있는 서로 다른 주가 3주(`dow_mean_min_weeks`) 미만 |
 
 - 세 모델 모두 `model_registry.horizon=0`, `target_var='speed'`, `is_active=1`이고, 같은 `base_time`으로 매 실행마다 함께 저장한다.
+- 예측·갱신 대상 구간은 `is_target=1`이며, 처리 순서는 항상 **(도로 순서, seq)**다. 도로 순서는
+  `settings.corridors` 인덱스이고 목록에 없는 도로는 그 뒤에 `road_name` 순서다(C-01 v1.4).
+  `ORDER BY seq`만 쓰면 여러 도로의 구간이 섞인다.
 - `base_time`은 `available_at ≤ now`이고 stale(10분)이 아닌 최신 bin. 없으면 `floor_5min(now) − 5분`.
 - 입력 품질 `input_quality`: 근거 bin flag가 `ok`면 `ok`, `partial`·`unweighted`·`imputed`면 `degraded`, 예측 불가면 `skipped`(predicted_value NULL). dow_mean은 표본 수로 판단한다(충족하면 `ok`).
 - skipped 행은 같은 키로 다시 예측할 때 덮어쓴다(늦게 도착한 bin으로 채움). `ok`·`degraded` 행은 덮어쓰지 않는다.
@@ -34,14 +37,17 @@
 이며 `eval_window`(07:00~09:00, 양끝 포함) 안인 것만 평가한다. `calendar_info`에 해당 날짜 행이
 없으면 주말만 제외하고 경고를 남긴다.
 
-- 행 단위: (model_version, eval_type=`live`, period, segment_id NULL=전체 또는 구간, regime).
-  horizon은 컬럼이 없으므로 `regime` 값에 `h{분}:` 접두어로 표현한다(예: `h15:all`).
+- 행 단위: (model_version, eval_type=`live`, period, segment_id NULL=도로 집계 또는 구간,
+  road_name, regime). horizon은 컬럼이 없으므로 `regime` 값에 `h{분}:` 접두어로 표현한다(예: `h15:all`).
+- **집계 행(`segment_id IS NULL`)은 도로마다 따로 만든다**(`road_name` = 그 도로). 두 도로를
+  합친 행은 만들지 않으므로, 한 도로를 추가해도 다른 도로의 집계 수치가 바뀌지 않는다(C-04 v1.4).
+  구간 행의 `road_name`은 그 구간의 도로다.
 - regime(실제값 기준): `all`, `free_flow`(grade=free), `congested`(grade=jam),
   `congestion_onset`(target − 15분 bin 실제 speed 대비 `1 − congestion_onset_drop` 이하 하락).
 - 지표: `mae`, `rmse`, `wape = Σ|pred − actual| / Σ|actual|`(분모 0이면 NULL),
   `grade_accuracy = grade(pred) == grade(actual)` 비율(`common.grades.grade`).
-- 같은 (model_version, eval_type, period_end 날짜, segment_id, regime) 행이 있으면 교체한다.
-  표본이 0인 조합은 행을 만들지 않는다.
+- 같은 (model_version, eval_type, period_end 날짜, segment_id, road_name, regime) 행이 있으면
+  교체한다. 표본이 0인 조합은 행을 만들지 않는다.
 - `calendar_info`에 없는 평일 날짜는 실행당 1회만 경고한다(같은 날짜 표본이 여러 개여도).
 - 합성 데이터로 계산한 지표를 실제 성능으로 보고하지 않는다(C-04 불변 조건).
 
@@ -50,7 +56,7 @@
 | 무엇 | 어디 |
 |---|---|
 | 공개 진입점 `predict_latest`, `backfill_actuals`, `evaluate` (C-06) | `prediction/__init__.py` |
-| 모델 버전 상수, registry 등록, 최신 bin 선택, 예측 행 저장(skipped 덮어쓰기), backfill | `prediction/baseline.py` |
+| 모델 버전 상수, registry 등록, 최신 bin 선택, 예측 행 저장(skipped 덮어쓰기), backfill, 대상 구간 순서(`ordered_target_segments`) | `prediction/baseline.py` |
 | recent15(최근 15분 평균), dow_mean(과거 동일 요일·시간대 평균, 표본 조회 하한 `dow_mean_lookback_weeks`) | `prediction/baselines.py` |
 | 평가(기간 필터, regime, 지표, `model_evaluation` 저장) | `prediction/evaluate.py` |
 | 테스트 | `tests/prediction/` (`test_persistence.py`, `test_baselines.py`, `test_evaluate.py`) |

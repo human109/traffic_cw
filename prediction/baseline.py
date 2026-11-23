@@ -58,6 +58,33 @@ def _is_stale(bin_time: datetime, now: datetime, stale_minutes: int) -> bool:
     return now - (bin_time + BIN) > timedelta(minutes=stale_minutes)
 
 
+def road_order_key(road_name: str, settings: Settings) -> tuple[int, str]:
+    """도로 정렬 키 (C-01 v1.4).
+
+    `settings.corridors` 안의 도로는 그 인덱스 순서, 목록에 없는 도로는 목록 뒤에서
+    `road_name` 순서다.
+    """
+    try:
+        return (settings.corridors.index(road_name), "")
+    except ValueError:
+        return (len(settings.corridors), road_name)
+
+
+def ordered_target_segments(conn: sqlite3.Connection, settings: Settings) -> list[str]:
+    """예측 대상(`is_target=1`) 구간을 (도로 순서, seq)로 정렬해 돌려준다 (C-01 v1.4).
+
+    `ORDER BY seq`만 쓰면 여러 도로의 구간이 섞이므로, 도로 순서를 먼저 적용한다.
+    """
+    rows = conn.execute(
+        "SELECT segment_id, road_name, seq FROM road_segment WHERE is_target = 1"
+    ).fetchall()
+    ordered = sorted(
+        rows,
+        key=lambda r: (*road_order_key(r["road_name"], settings), r["seq"], r["segment_id"]),
+    )
+    return [r["segment_id"] for r in ordered]
+
+
 def latest_usable_bin(
     conn: sqlite3.Connection, segment_id: str, now: datetime, stale_minutes: int
 ) -> sqlite3.Row | None:
@@ -178,12 +205,7 @@ def predict_all(conn: sqlite3.Connection, now: datetime, settings: Settings) -> 
 
     require_aware(now)
     ensure_registry(conn, now)
-    segments = [
-        r[0]
-        for r in conn.execute(
-            "SELECT segment_id FROM road_segment WHERE is_target = 1 ORDER BY seq, segment_id"
-        )
-    ]
+    segments = ordered_target_segments(conn, settings)
     total = 0
     try:
         for sid in segments:
@@ -210,10 +232,22 @@ def backfill(conn: sqlite3.Connection, now: datetime, settings: Settings) -> int
     require_aware(now)
     cutoff = now - timedelta(hours=settings.backfill_lookback_hours)
     pending = conn.execute(
-        "SELECT id, segment_id, target_time, predicted_value FROM traffic_prediction"
-        " WHERE actual_value IS NULL AND target_var = ? AND target_time >= ? AND target_time <= ?",
+        "SELECT p.id, p.segment_id, p.target_time, p.predicted_value, rs.road_name, rs.seq"
+        " FROM traffic_prediction p JOIN road_segment rs ON rs.segment_id = p.segment_id"
+        " WHERE p.actual_value IS NULL AND p.target_var = ?"
+        " AND p.target_time >= ? AND p.target_time <= ?",
         (TARGET_VAR, to_iso(cutoff), to_iso(now)),
     ).fetchall()
+    # 갱신 순서도 예측과 같은 (도로 순서, seq)를 유지한다 (C-01 v1.4).
+    pending = sorted(
+        pending,
+        key=lambda p: (
+            *road_order_key(p["road_name"], settings),
+            p["seq"],
+            parse_iso(p["target_time"]),
+            p["id"],
+        ),
+    )
     updated = 0
     try:
         for p in pending:

@@ -14,6 +14,7 @@ from common.timeutil import to_iso
 from config.settings import Settings
 from prediction import backfill_actuals, predict_latest
 from prediction.baseline import DOW_MEAN_VERSION, PERSISTENCE_VERSION, RECENT15_VERSION
+from tests.fixtures.synthetic_db import ROAD_A, ROAD_B, build_fixture_db
 from tests.prediction.helpers import insert_bin, t
 
 NOW = t(16, 7, 6)  # 2026-11-16 월요일 07:06
@@ -59,6 +60,62 @@ def test_three_models_share_base_time(fixture_conn: sqlite3.Connection) -> None:
     assert base_times == {to_iso(BASE)}
     for model in (PERSISTENCE_VERSION, RECENT15_VERSION, DOW_MEAN_VERSION):
         assert set(_preds(fixture_conn, model)) == {5, 10, 15, 30}
+
+
+def test_target_segment_order_corridors(fixture_conn_two: sqlite3.Connection) -> None:
+    # 예측 대상 구간 순서는 (settings.corridors 도로 순서, seq)다 (C-01 v1.4).
+    from prediction.baseline import ordered_target_segments
+
+    # corridors에 픽스처 도로를 거꾸로 넣으면 W가 먼저다
+    assert ordered_target_segments(
+        fixture_conn_two, Settings(corridors=(ROAD_B, ROAD_A))
+    ) == ["W1", "W2", "S1", "S2", "S3"]
+    # corridors 순서대로면 S가 먼저다
+    assert ordered_target_segments(
+        fixture_conn_two, Settings(corridors=(ROAD_A, ROAD_B))
+    ) == ["S1", "S2", "S3", "W1", "W2"]
+
+
+def test_target_segment_order_unknown_roads_by_name(fixture_conn_two: sqlite3.Connection) -> None:
+    # corridors에 없는 도로는 목록에 있는 도로 뒤에 road_name 순으로 온다 (C-01 v1.4).
+    # 기본 corridors(창원대로, 원이대로)엔 합성 도로가 없으므로 road_name 순: 합성도로 < 합성도로B.
+    from prediction.baseline import ordered_target_segments
+
+    assert ordered_target_segments(fixture_conn_two, Settings()) == [
+        "S1",
+        "S2",
+        "S3",
+        "W1",
+        "W2",
+    ]
+
+
+def test_predict_inserts_in_road_order(
+    fixture_conn_two: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # corridors 순서를 뒤집으면 첫 예측 행은 두 번째 도로의 첫 구간(W1)에서 나온다.
+    _with_settings(monkeypatch, corridors=(ROAD_B, ROAD_A))
+    predict_latest(NOW, conn=fixture_conn_two)
+    first = fixture_conn_two.execute(
+        "SELECT segment_id FROM traffic_prediction ORDER BY id LIMIT 1"
+    ).fetchone()
+    assert first[0] == "W1"
+
+
+def test_second_road_not_target_no_predictions(tmp_path) -> None:
+    # 두 번째 도로가 대상이 아니면(second_road_target=False → W is_target=0) W 예측 행이 없다
+    # (Review Focus 3: target_corridors에 없는 도로가 예측에 새지 않는다).
+    db = build_fixture_db(tmp_path / "w_off.db", second_road=True, second_road_target=False)
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        n = predict_latest(NOW, conn=conn)
+        assert n == 36  # 대상 3구간(S1~S3) x horizon 4 x 모델 3
+        segs = {r[0] for r in conn.execute("SELECT DISTINCT segment_id FROM traffic_prediction")}
+        assert segs == {"S1", "S2", "S3"}  # W0~W2는 예측 대상이 아니다
+    finally:
+        conn.close()
 
 
 def test_imputed_input_degraded(fixture_conn: sqlite3.Connection) -> None:

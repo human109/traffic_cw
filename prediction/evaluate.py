@@ -1,11 +1,12 @@
-"""모델 평가 (C-04 v1, SPEC 8장). `prediction.evaluate` 진입점의 본체.
+"""모델 평가 (C-04 v1.4, SPEC 8장). `prediction.evaluate` 진입점의 본체.
 
 기간 `[now − days, now)`의 예측 중 `actual_value`·`predicted_value`가 모두 있고,
 target_time이 평일·비공휴일(`calendar_info.is_holiday`)이며 `eval_window`(양끝 포함) 안인
 것만 평가한다. `calendar_info`에 해당 날짜 행이 없으면 주말만 제외하고 경고를 남긴다.
 
 테이블에 horizon 컬럼이 없으므로 horizon은 `regime` 값에 `h{분}:` 접두어로 표현한다
-(예: `h15:all`, `h30:congestion_onset`). regime은 실제값 기준이다.
+(예: `h15:all`, `h30:congestion_onset`). regime은 실제값 기준이다. 집계 행
+(`segment_id IS NULL`)은 도로마다 따로 만든다 — 두 도로를 합친 행은 만들지 않는다(C-04 v1.4).
 """
 
 from __future__ import annotations
@@ -27,15 +28,16 @@ EVAL_TYPE = "live"
 REGIMES: tuple[str, ...] = ("all", "free_flow", "congested", "congestion_onset")
 ONSET_LOOKBACK = timedelta(minutes=15)  # congestion_onset 판정에 비교할 직전 bin 간격 (SPEC 8.1)
 
-# (model_version, horizon, segment_id 또는 None=전체, regime) → [(predicted, actual)]
-Samples = dict[tuple[str, int, str | None, str], list[tuple[float, float]]]
+# (model_version, horizon, segment_id 또는 None=도로 집계, road_name, regime) → [(predicted, actual)]
+Samples = dict[tuple[str, int, str | None, str, str], list[tuple[float, float]]]
 
 
 def run(conn: sqlite3.Connection, now: datetime, days: int, settings: Settings) -> int:
     """C-04 평가 행을 `model_evaluation`에 저장하고 저장한 행 수를 돌려준다.
 
-    같은 (model_version, eval_type, period_end 날짜, segment_id, regime) 행이 있으면 교체한다.
-    표본이 0인 조합은 행을 만들지 않는다. 예외 시 rollback 후 다시 던진다.
+    행 단위는 (model_version, horizon, segment_id[NULL=도로 집계], road_name, regime)이고,
+    같은 (model_version, eval_type, period_end 날짜, segment_id, road_name, regime) 행이
+    있으면 교체한다. 표본이 0인 조합은 행을 만들지 않는다. 예외 시 rollback 후 다시 던진다.
     """
     period_start = now - timedelta(days=days)
     samples = _collect(conn, now, period_start, settings)
@@ -44,27 +46,30 @@ def run(conn: sqlite3.Connection, now: datetime, days: int, settings: Settings) 
     today = to_iso(now)[:10]
     count = 0
     try:
-        for (model_version, horizon, segment, regime_name), pairs in sorted(
-            samples.items(), key=lambda item: (item[0][0], item[0][1], item[0][2] or "", item[0][3])
-        ):
+        # segment_id가 None(도로 집계)과 문자열(구간)이 섞이므로 정렬 키에서 ""로 바꾼다.
+        for key in sorted(samples, key=lambda k: (k[0], k[1], k[2] or "", k[3], k[4])):
+            model_version, horizon, segment, road, regime_name = key
+            pairs = samples[key]
             n, mae, rmse, wape, accuracy = _metrics(pairs, settings)
             regime = f"h{horizon}:{regime_name}"
             conn.execute(
                 "DELETE FROM model_evaluation WHERE model_version = ? AND eval_type = ?"
-                " AND substr(period_end, 1, 10) = ? AND segment_id IS ? AND regime = ?",
-                (model_version, EVAL_TYPE, today, segment, regime),
+                " AND substr(period_end, 1, 10) = ? AND segment_id IS ? AND road_name IS ?"
+                " AND regime = ?",
+                (model_version, EVAL_TYPE, today, segment, road, regime),
             )
             conn.execute(
                 "INSERT INTO model_evaluation"
-                " (model_version, eval_type, period_start, period_end, segment_id, regime,"
-                "  n_samples, mae, rmse, wape, grade_accuracy, evaluated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " (model_version, eval_type, period_start, period_end, segment_id, road_name,"
+                "  regime, n_samples, mae, rmse, wape, grade_accuracy, evaluated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     model_version,
                     EVAL_TYPE,
                     to_iso(period_start),
                     to_iso(now),
                     segment,
+                    road,
                     regime,
                     n,
                     mae,
@@ -88,6 +93,14 @@ def _load_calendar(conn: sqlite3.Connection) -> dict[str, int]:
     return {
         r["date"]: r["is_holiday"]
         for r in conn.execute("SELECT date, is_holiday FROM calendar_info")
+    }
+
+
+def _load_roads(conn: sqlite3.Connection) -> dict[str, str]:
+    """segment_id → road_name (도로 구분 키, C-01 v1.4)."""
+    return {
+        r["segment_id"]: r["road_name"]
+        for r in conn.execute("SELECT segment_id, road_name FROM road_segment")
     }
 
 
@@ -129,6 +142,7 @@ def _collect(
     if not rows:
         return {}
     calendar = _load_calendar(conn)
+    roads = _load_roads(conn)
     window_start = time.fromisoformat(settings.eval_window[0])
     window_end = time.fromisoformat(settings.eval_window[1])
     onset_cache: dict[tuple[str, str], float | None] = {}
@@ -155,18 +169,23 @@ def _collect(
         actual = float(r["actual_value"])
         predicted = float(r["predicted_value"])
         model_version, horizon, segment = r["model_version"], r["horizon"], r["segment_id"]
+        road = roads[segment]  # traffic_prediction.segment_id는 road_segment를 참조하므로 항상 있다
 
         actual_grade = grade(actual, settings)
         ref = _onset_reference(conn, segment, target, now, onset_cache)
         onset = ref is not None and actual <= ref * (1 - settings.congestion_onset_drop)
-        for scope in (None, segment):  # None = 전체
-            samples[(model_version, horizon, scope, "all")].append((predicted, actual))
+        for scope in (None, segment):  # None = 도로 집계 행
+            samples[(model_version, horizon, scope, road, "all")].append((predicted, actual))
             if actual_grade == "free":
-                samples[(model_version, horizon, scope, "free_flow")].append((predicted, actual))
+                samples[(model_version, horizon, scope, road, "free_flow")].append(
+                    (predicted, actual)
+                )
             elif actual_grade == "jam":
-                samples[(model_version, horizon, scope, "congested")].append((predicted, actual))
+                samples[(model_version, horizon, scope, road, "congested")].append(
+                    (predicted, actual)
+                )
             if onset:
-                samples[(model_version, horizon, scope, "congestion_onset")].append(
+                samples[(model_version, horizon, scope, road, "congestion_onset")].append(
                     (predicted, actual)
                 )
     return samples
