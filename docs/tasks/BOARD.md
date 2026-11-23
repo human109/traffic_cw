@@ -83,7 +83,7 @@
 |---|---|---|---|
 | R-09 | 원이대로 링크 표·구간 후보 | researcher | done (60fce90) |
 | W-01 | 계약·SPEC·설정(`corridors`, `target_corridors`)·구간 시드 W0~W5·링크 35행·픽스처(`fixture_db_two`) | orchestrator | done |
-| W-02 | `init_db` 마이그레이션(`model_evaluation.road_name`), schema.sql 동기화, 도로별 성공률 `rate(..., road_name)` | dev-data | in_progress |
+| W-02 | `init_db` 마이그레이션(`model_evaluation.road_name`), schema.sql 동기화, 도로별 성공률 `rate(..., road_name)` | dev-data | done (ccf81cb). 운영 DB 적용 11/23 12:20(백업 `traffic_before_wonidaero_20261123.db` = backup_db 스냅숏): 평가 504행 '창원대로', 구간 13(원이대로 6은 is_target=0), 링크 74 |
 | W-03 | 원본 재적재 `maintenance.reload_raw` | dev-collector | in_progress |
 | W-04 | 도로별 평가 집계, 구간 순서 (도로, seq) | dev-ml | in_progress |
 | W-05 | 대시보드 도로 선택 `?road=` | dev-dashboard | in_progress |
