@@ -24,7 +24,7 @@
 
 ## 결정
 
-- **C-01**: `road_segment`에 `corridor TEXT NOT NULL DEFAULT '창원대로'`. 기존 행은 기본값으로 이전(운영 DB는 `ALTER TABLE ... ADD COLUMN` 마이그레이션, 백업 선행).
+- **C-01**: ~~`road_segment`에 `corridor` 열 추가~~ → 계획 단계에서 `road_segment.road_name`이 이미 같은 역할(값 `창원대로`)임을 확인해 이것을 도로 구분 키로 쓴다(오케스트레이터 판단, 같은 결과·마이그레이션 없음). 평가 집계용으로 `model_evaluation.road_name`(nullable)만 추가.
 - **C-02**: 저장 범위 `its_store_road_names`에 `원이대로` 추가(양방향 저장, 원본은 이미 전체 보관). 11/19 이후 원본에서 원이대로 행 재적재.
 - **구간 ID**: `W0`(참고, 있으면) `W1…`. 링크 표 생성은 `config/build_segment_links.py`에 원이대로 입력 추가(R-09 결과).
 - **켜는 시점**: 11/24 Slice 0 판정 후 `is_target=1`. 그 전에는 링크·구간은 `is_target=0`으로 적재 가능.
